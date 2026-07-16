@@ -1,0 +1,19 @@
+{% extends "templates/web.html" %}
+
+{% block page_content %}
+<div class="container" style="max-width: 640px; margin: 4rem auto; text-align: center;">
+	{% if success %}
+	<h2 style="color: var(--green-600, #28a745);">✓ Amazon Connected</h2>
+	<p>{{ message }}</p>
+	{% if selling_partner_id %}
+	<p><small>Selling Partner ID: <code>{{ selling_partner_id }}</code></small></p>
+	{% endif %}
+	{% else %}
+	<h2 style="color: var(--red-600, #dc3545);">Connection Failed</h2>
+	<p>{{ message }}</p>
+	{% endif %}
+	<p style="margin-top: 2rem;">
+		<a class="btn btn-primary" href="/app/amazon-connection">Back to Amazon Connection</a>
+	</p>
+</div>
+{% endblock %}

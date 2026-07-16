@@ -1,0 +1,200 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:sku",
+ "creation": "2026-07-16 00:00:00.000000",
+ "description": "Unified Amazon listing register: active/inactive/suppressed state and suppression reasons, reconciled from SP-API.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sku",
+  "title",
+  "asin",
+  "product",
+  "column_break_ident",
+  "marketplace",
+  "listing_status",
+  "fulfillment_channel",
+  "offer_section",
+  "price",
+  "currency",
+  "quantity",
+  "column_break_offer",
+  "condition",
+  "image_urls",
+  "issues_section",
+  "suppression_reasons",
+  "sync_section",
+  "last_synced_at",
+  "raw_summary"
+ ],
+ "fields": [
+  {
+   "fieldname": "sku",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "SKU",
+   "reqd": 1,
+   "unique": 1,
+   "description": "Seller SKU."
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title"
+  },
+  {
+   "fieldname": "asin",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "ASIN"
+  },
+  {
+   "fieldname": "product",
+   "fieldtype": "Link",
+   "label": "Product (Item)",
+   "options": "Item",
+   "description": "Optional link to the ERPNext Item this listing represents."
+  },
+  {
+   "fieldname": "column_break_ident",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "marketplace",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Marketplace",
+   "options": "Amazon Marketplace"
+  },
+  {
+   "default": "pending",
+   "fieldname": "listing_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Listing Status",
+   "options": "active\ninactive\nsuppressed\nincomplete\npending"
+  },
+  {
+   "default": "DEFAULT",
+   "fieldname": "fulfillment_channel",
+   "fieldtype": "Select",
+   "label": "Fulfillment Channel",
+   "options": "DEFAULT\nAMAZON",
+   "description": "DEFAULT = merchant-fulfilled (MFN); AMAZON = FBA."
+  },
+  {
+   "fieldname": "offer_section",
+   "fieldtype": "Section Break",
+   "label": "Offer"
+  },
+  {
+   "fieldname": "price",
+   "fieldtype": "Currency",
+   "label": "Price",
+   "options": "currency"
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency"
+  },
+  {
+   "fieldname": "quantity",
+   "fieldtype": "Int",
+   "label": "Quantity"
+  },
+  {
+   "fieldname": "column_break_offer",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "new_new",
+   "fieldname": "condition",
+   "fieldtype": "Select",
+   "label": "Condition",
+   "options": "new_new\nnew_open_box\nnew_oem\nused_like_new\nused_very_good\nused_good\nused_acceptable\ncollectible_like_new\ncollectible_very_good\ncollectible_good\ncollectible_acceptable\nrefurbished_refurbished"
+  },
+  {
+   "fieldname": "image_urls",
+   "fieldtype": "Small Text",
+   "label": "Image URLs"
+  },
+  {
+   "fieldname": "issues_section",
+   "fieldtype": "Section Break",
+   "label": "Issues"
+  },
+  {
+   "fieldname": "suppression_reasons",
+   "fieldtype": "Table",
+   "label": "Suppression Reasons",
+   "options": "Amazon Listing Issue"
+  },
+  {
+   "fieldname": "sync_section",
+   "fieldtype": "Section Break",
+   "label": "Sync"
+  },
+  {
+   "fieldname": "last_synced_at",
+   "fieldtype": "Datetime",
+   "label": "Last Synced At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_summary",
+   "fieldtype": "Code",
+   "label": "Raw Summary (JSON)",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Alaiy Os Connector Sp Api",
+ "name": "Amazon Listing",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Amazon Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Amazon Viewer"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "title"
+}

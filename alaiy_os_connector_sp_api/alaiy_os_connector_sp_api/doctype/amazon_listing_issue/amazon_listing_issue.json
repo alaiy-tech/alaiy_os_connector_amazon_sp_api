@@ -1,0 +1,52 @@
+{
+ "actions": [],
+ "creation": "2026-07-16 00:00:00.000000",
+ "description": "A single SP-API listing issue (suppression/incomplete reason). Child of Amazon Listing.",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "code",
+  "severity",
+  "message",
+  "attribute_names"
+ ],
+ "fields": [
+  {
+   "fieldname": "code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Code"
+  },
+  {
+   "fieldname": "severity",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Severity",
+   "options": "ERROR\nWARNING\nINFO"
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Message"
+  },
+  {
+   "fieldname": "attribute_names",
+   "fieldtype": "Small Text",
+   "label": "Offending Attributes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Alaiy Os Connector Sp Api",
+ "name": "Amazon Listing Issue",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

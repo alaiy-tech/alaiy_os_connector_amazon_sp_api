@@ -5,6 +5,53 @@ app_description = "AlaiyOS Connector to interact with SP API"
 app_email = "mail@alaiy.com"
 app_license = "agpl-3.0"
 
+# Installation
+# ------------
+after_install = "alaiy_os_connector_sp_api.setup.install.after_install"
+after_migrate = "alaiy_os_connector_sp_api.setup.install.after_migrate"
+
+# AlaiyOS integration
+# -------------------
+# Re-inject the Amazon sidebar section whenever the core rebuilds the OS sidebar.
+doc_events = {
+	"Workspace Sidebar": {
+		"on_update": "alaiy_os_connector_sp_api.setup.install._on_sidebar_update",
+	}
+}
+
+# Log links surfaced in the OS Settings sidebar 'Logs' section by alaiy_os_core.
+alaiy_os_sidebar_log_items = [
+	{"link_type": "DocType", "link_to": "SP-API Log", "label": "SP-API Logs", "icon": "activity"},
+]
+
+# Desk client scripts
+# -------------------
+doctype_js = {"Amazon Connection": "public/js/amazon_connection.js"}
+
+# Website routes (clean, hyphenated OAuth URLs -> www page controllers)
+# ---------------------------------------------------------------------
+website_route_rules = [
+	{"from_route": "/amazon-oauth/start", "to_route": "amazon_oauth_start"},
+	{"from_route": "/amazon-oauth/callback", "to_route": "amazon_oauth_callback"},
+]
+
+# Scheduled Tasks
+# ---------------
+scheduler_events = {
+	"daily": [
+		"alaiy_os_connector_sp_api.tasks.sync_health",
+	],
+	"hourly": [
+		"alaiy_os_connector_sp_api.tasks.refresh_connection_status",
+	],
+	"cron": {
+		# Every 6 hours: rebuild listing state (Phase 3).
+		"0 */6 * * *": [
+			"alaiy_os_connector_sp_api.tasks.reconcile_listings",
+		],
+	},
+}
+
 # Apps
 # ------------------
 

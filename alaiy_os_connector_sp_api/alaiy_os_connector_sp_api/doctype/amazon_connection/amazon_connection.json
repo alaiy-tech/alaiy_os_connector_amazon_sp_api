@@ -1,0 +1,139 @@
+{
+ "actions": [],
+ "creation": "2026-07-16 00:00:00.000000",
+ "description": "The single Amazon seller connection for this site. Holds the OAuth refresh token and region.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "connection_section",
+  "last_status",
+  "last_status_message",
+  "connected_at",
+  "column_break_status",
+  "app_status",
+  "region",
+  "endpoint",
+  "credentials_section",
+  "selling_partner_id",
+  "refresh_token",
+  "column_break_creds",
+  "primary_marketplace"
+ ],
+ "fields": [
+  {
+   "fieldname": "connection_section",
+   "fieldtype": "Section Break",
+   "label": "Connection Status"
+  },
+  {
+   "default": "not_configured",
+   "fieldname": "last_status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "not_configured\nconnected\nerror",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_status_message",
+   "fieldtype": "Small Text",
+   "label": "Status Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "connected_at",
+   "fieldtype": "Datetime",
+   "label": "Connected At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_status",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Draft",
+   "description": "Draft apps append version=beta to the consent URL.",
+   "fieldname": "app_status",
+   "fieldtype": "Select",
+   "label": "App Status",
+   "options": "Draft\nPublished"
+  },
+  {
+   "default": "NA",
+   "fieldname": "region",
+   "fieldtype": "Select",
+   "label": "Region",
+   "options": "NA\nEU\nFE",
+   "reqd": 1
+  },
+  {
+   "fieldname": "endpoint",
+   "fieldtype": "Data",
+   "label": "Endpoint",
+   "read_only": 1
+  },
+  {
+   "fieldname": "credentials_section",
+   "fieldtype": "Section Break",
+   "label": "Credentials"
+  },
+  {
+   "fieldname": "selling_partner_id",
+   "fieldtype": "Data",
+   "label": "Selling Partner ID",
+   "read_only": 1
+  },
+  {
+   "description": "Encrypted at rest. Set by the OAuth callback; never shown to the client.",
+   "fieldname": "refresh_token",
+   "fieldtype": "Password",
+   "label": "Refresh Token"
+  },
+  {
+   "fieldname": "column_break_creds",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "primary_marketplace",
+   "fieldtype": "Link",
+   "label": "Primary Marketplace",
+   "options": "Amazon Marketplace"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-07-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Alaiy Os Connector Sp Api",
+ "name": "Amazon Connection",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Amazon Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Amazon Viewer"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

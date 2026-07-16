@@ -1,0 +1,152 @@
+{
+ "actions": [],
+ "autoname": "format:{marketplace}::{metric_key}",
+ "creation": "2026-07-16 00:00:00.000000",
+ "description": "One account-health metric for a marketplace, upserted on sync. Unique on (marketplace, metric_key).",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "marketplace",
+  "metric_key",
+  "metric_label",
+  "section",
+  "column_break_val",
+  "metric_value",
+  "metric_target",
+  "higher_is_better",
+  "health_status",
+  "finances_section",
+  "finances_guarantees",
+  "finances_chargebacks",
+  "column_break_sync",
+  "synced_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "marketplace",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Marketplace",
+   "options": "Amazon Marketplace",
+   "reqd": 1
+  },
+  {
+   "fieldname": "metric_key",
+   "fieldtype": "Data",
+   "label": "Metric Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "metric_label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Metric"
+  },
+  {
+   "fieldname": "section",
+   "fieldtype": "Select",
+   "label": "Section",
+   "options": "customer_service\nshipping"
+  },
+  {
+   "fieldname": "column_break_val",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "metric_value",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Value (%)",
+   "precision": "3"
+  },
+  {
+   "fieldname": "metric_target",
+   "fieldtype": "Float",
+   "label": "Target (%)",
+   "precision": "3"
+  },
+  {
+   "default": "0",
+   "fieldname": "higher_is_better",
+   "fieldtype": "Check",
+   "label": "Higher Is Better"
+  },
+  {
+   "fieldname": "health_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "ok\nwarn\ncritical",
+   "read_only": 1
+  },
+  {
+   "fieldname": "finances_section",
+   "fieldtype": "Section Break",
+   "label": "Finances (ODR only)"
+  },
+  {
+   "fieldname": "finances_guarantees",
+   "fieldtype": "Int",
+   "label": "A-to-Z Guarantee Claims"
+  },
+  {
+   "fieldname": "finances_chargebacks",
+   "fieldtype": "Int",
+   "label": "Chargebacks"
+  },
+  {
+   "fieldname": "column_break_sync",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "synced_at",
+   "fieldtype": "Datetime",
+   "label": "Synced At",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-16 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Alaiy Os Connector Sp Api",
+ "name": "Account Health Metric",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Amazon Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Amazon Viewer"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
