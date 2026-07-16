@@ -26,6 +26,33 @@ class AmazonConnection(Document):
 		self.db_set("last_status", status, update_modified=False)
 		if message is not None:
 			self.db_set("last_status_message", message[:1000], update_modified=False)
+		self._sync_registry_status(status)
+
+	def _sync_registry_status(self, status):
+		"""Mirror our status onto the OS Connector Registry row so the AlaiyOS
+		connector card/panel reflects an OAuth connect (not just a Test click)."""
+		try:
+			from alaiy_os_connector_sp_api.connector_meta import connector_meta
+
+			connector_id = connector_meta["connector_id"]
+			if not frappe.db.exists("OS Connector Registry", connector_id):
+				return
+			mapped = {
+				"connected": "connected",
+				"error": "failed",
+				"not_configured": "untested",
+			}.get(status, "untested")
+			values = {"connection_status": mapped}
+			if status in ("connected", "error"):
+				values["last_tested_at"] = now_datetime()
+			frappe.db.set_value(
+				"OS Connector Registry", connector_id, values, update_modified=False
+			)
+		except Exception:
+			frappe.log_error(
+				title="Amazon connector: registry status sync failed",
+				message=frappe.get_traceback(),
+			)
 
 	def clear_token(self, message=None):
 		"""Wipe the stored refresh token and drop any cached access token."""
