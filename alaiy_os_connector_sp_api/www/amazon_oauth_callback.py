@@ -57,11 +57,15 @@ def get_context(context):
 	except SpApiError as e:
 		message = describe_forbidden(e, role_free=True) if e.is_forbidden() else e.message
 		connection.set_status("error", message)
+		# This is a GET request; Frappe rolls back on GET unless we commit, which
+		# would drop the stored token, the error status, and the SP-API Log rows.
+		frappe.db.commit()
 		context.success = False
 		context.message = message
 		return context
 
 	connection.set_status("connected", "Connected and verified")
+	frappe.db.commit()  # persist across the GET-request rollback (see above)
 	context.success = True
 	context.message = _("Amazon account connected successfully.")
 	context.selling_partner_id = selling_partner_id
