@@ -56,11 +56,16 @@ class AmazonConnection(Document):
 
 	def clear_token(self, message=None):
 		"""Wipe the stored refresh token and drop any cached access token."""
+		from frappe.utils.password import remove_encrypted_password
+
 		from alaiy_os_connector_sp_api.spapi import auth
 
 		token = self.get_password("refresh_token", raise_exception=False)
 		if token:
 			auth.clear_cached_token(token)
+		# Password values live in the __Auth table; db_set on the column alone
+		# leaves the encrypted secret behind, so remove it there too.
+		remove_encrypted_password(self.doctype, self.name, "refresh_token")
 		self.db_set("refresh_token", "", update_modified=False)
 		self.db_set("selling_partner_id", "", update_modified=False)
 		self.set_status("not_configured", message or "Disconnected")

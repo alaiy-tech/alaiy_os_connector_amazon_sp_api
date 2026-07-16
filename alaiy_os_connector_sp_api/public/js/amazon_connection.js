@@ -15,9 +15,12 @@ frappe.ui.form.on("Amazon Connection", {
 				`</span>`
 		);
 
-		const connected = status === "connected";
+		// Branch on whether a refresh token is actually stored (is_connected),
+		// not just status === "connected": an authorized-but-erroring connection
+		// still has a token and should offer Test/Disconnect, not just Connect.
+		const hasToken = !!frm.doc.refresh_token;
 
-		if (!connected) {
+		if (!hasToken) {
 			// Connect requires app credentials in site_config. Check first so the
 			// operator sees exactly what's missing instead of a mid-flow error.
 			frappe.call({

@@ -47,12 +47,16 @@ def get_context(context):
 
 	connection = oauth.store_refresh_token(refresh_token, selling_partner_id)
 
-	# Verify with a role-free preflight; on failure, roll back the token.
+	# Verify with a role-free preflight. Keep the token even if it fails — the
+	# authorization succeeded, and a 403 here is usually a fixable region /
+	# beta / role problem. We mark the connection `error` with an actionable
+	# message so the operator can fix config and retry with "Test Connection"
+	# instead of re-doing the whole OAuth dance.
 	try:
 		SpApiClient(connection).preflight()
 	except SpApiError as e:
 		message = describe_forbidden(e, role_free=True) if e.is_forbidden() else e.message
-		connection.clear_token(message)
+		connection.set_status("error", message)
 		context.success = False
 		context.message = message
 		return context
