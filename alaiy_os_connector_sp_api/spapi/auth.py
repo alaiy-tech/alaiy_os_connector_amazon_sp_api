@@ -32,13 +32,12 @@ class LwaError(Exception):
 
 def _app_credentials():
 	"""Return (client_id, client_secret) from site_config, or throw."""
-	client_id = frappe.conf.get("amazon_lwa_client_id")
-	client_secret = frappe.conf.get("amazon_lwa_client_secret")
+	from alaiy_os_connector_sp_api import config
+
+	client_id = config.lwa_client_id()
+	client_secret = config.lwa_client_secret()
 	if not client_id or not client_secret:
-		frappe.throw(
-			"Amazon LWA app credentials are not configured. "
-			"Set amazon_lwa_client_id and amazon_lwa_client_secret in site_config.json."
-		)
+		config.assert_ready()
 	return client_id, client_secret
 
 

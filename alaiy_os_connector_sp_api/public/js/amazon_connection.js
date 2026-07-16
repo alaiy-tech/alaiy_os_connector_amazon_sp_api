@@ -18,16 +18,38 @@ frappe.ui.form.on("Amazon Connection", {
 		const connected = status === "connected";
 
 		if (!connected) {
-			frm.add_custom_button(__("Connect Amazon Account"), () => {
-				frappe.call({
-					method: "alaiy_os_connector_sp_api.api.get_connect_url",
-					callback: (r) => {
-						if (r.message && r.message.url) {
-							window.location.href = r.message.url;
-						}
-					},
-				});
-			}).addClass("btn-primary");
+			// Connect requires app credentials in site_config. Check first so the
+			// operator sees exactly what's missing instead of a mid-flow error.
+			frappe.call({
+				method: "alaiy_os_connector_sp_api.api.get_config_status",
+				callback: (r) => {
+					const cfg = r.message || {};
+					if (cfg.ready) {
+						frm.add_custom_button(__("Connect Amazon Account"), () => {
+							frappe.call({
+								method: "alaiy_os_connector_sp_api.api.get_connect_url",
+								callback: (res) => {
+									if (res.message && res.message.url) {
+										window.location.href = res.message.url;
+									}
+								},
+							});
+						}).addClass("btn-primary");
+					} else {
+						const missing = (cfg.keys || [])
+							.filter((k) => k.required && !k.is_set)
+							.map((k) => k.label);
+						frm.dashboard.add_comment(
+							__(
+								"App credentials missing in site_config.json: {0}. Set them with <code>bench set-config &lt;key&gt; &lt;value&gt;</code>, then reload.",
+								[frappe.utils.escape_html(missing.join(", "))]
+							),
+							"yellow",
+							true
+						);
+					}
+				},
+			});
 		} else {
 			frm.add_custom_button(
 				__("Disconnect"),

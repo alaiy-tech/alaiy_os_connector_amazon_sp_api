@@ -10,7 +10,7 @@ added here.
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api import oauth
+from alaiy_os_connector_sp_api import config, oauth
 from alaiy_os_connector_sp_api.spapi import health
 from alaiy_os_connector_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
@@ -42,9 +42,17 @@ def get_connection_status():
 
 
 @frappe.whitelist()
+def get_config_status():
+	"""Report which site_config credential keys are set (no secret values)."""
+	_require_manager()
+	return config.get_config_status()
+
+
+@frappe.whitelist()
 def get_connect_url():
 	"""Return the /amazon-oauth/start URL for the Connect button."""
 	_require_manager()
+	config.assert_ready()
 	return {"url": "/amazon-oauth/start"}
 
 

@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api.spapi.constants import REGION_CONSENT_HOSTS
+from alaiy_os_connector_sp_api import config
 
 OAUTH_ROLES = ("System Manager", "Amazon Manager")
 STATE_TTL = 600  # seconds
@@ -27,8 +27,7 @@ def require_oauth_role():
 
 
 def redirect_uri():
-	app_url = frappe.conf.get("app_url") or frappe.utils.get_url()
-	return f"{app_url.rstrip('/')}/amazon-oauth/callback"
+	return f"{config.app_url()}/amazon-oauth/callback"
 
 
 def _state_cache_key():
@@ -51,26 +50,23 @@ def validate_state(received):
 
 def consent_url(state):
 	"""Build the Amazon Seller Central consent URL."""
-	sp_app_id = frappe.conf.get("amazon_sp_app_id")
-	if not sp_app_id:
-		frappe.throw(_("amazon_sp_app_id is not configured in site_config.json."))
+	config.assert_ready()
 
 	connection = frappe.get_cached_doc("Amazon Connection")
-	base = frappe.conf.get("amazon_consent_base_url") or REGION_CONSENT_HOSTS.get(
-		connection.region or "NA"
-	)
+	base = config.consent_base_url(connection.region)
+	if not base:
+		frappe.throw(_("No consent base URL for region {0}.").format(connection.region))
 
 	params = {
-		"application_id": sp_app_id,
+		"application_id": config.sp_app_id(),
 		"state": state,
 		"redirect_uri": redirect_uri(),
 	}
 	# Draft apps must request the beta consent.
-	beta = frappe.conf.get("amazon_app_beta")
-	if beta or connection.app_status == "Draft":
+	if config.app_beta() or connection.app_status == "Draft":
 		params["version"] = "beta"
 
-	return f"{base.rstrip('/')}/apps/authorize/consent?{urlencode(params)}"
+	return f"{base}/apps/authorize/consent?{urlencode(params)}"
 
 
 def store_refresh_token(refresh_token, selling_partner_id):
