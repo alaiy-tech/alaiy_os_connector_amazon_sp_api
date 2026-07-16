@@ -44,7 +44,7 @@ Register the redirect URL in Seller Central → Develop Apps as
 `{app_url}/amazon-oauth/callback`.
 
 The **Amazon Connection** form shows which required keys are still missing and
-only enables **Connect** once all are set (see `alaiy_os_connector_sp_api.config`).
+only enables **Connect** once all are set (see `alaiy_os_connector_sp_api.app_config`).
 
 ### Contributing
 

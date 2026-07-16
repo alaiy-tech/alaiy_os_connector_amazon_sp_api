@@ -32,7 +32,7 @@ class LwaError(Exception):
 
 def _app_credentials():
 	"""Return (client_id, client_secret) from site_config, or throw."""
-	from alaiy_os_connector_sp_api import config
+	from alaiy_os_connector_sp_api import app_config as config
 
 	client_id = config.lwa_client_id()
 	client_secret = config.lwa_client_secret()

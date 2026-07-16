@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api import config
+from alaiy_os_connector_sp_api import app_config as config
 
 OAUTH_ROLES = ("System Manager", "Amazon Manager")
 STATE_TTL = 600  # seconds

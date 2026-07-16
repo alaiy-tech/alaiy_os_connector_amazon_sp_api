@@ -10,7 +10,7 @@ added here.
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api import config, oauth
+from alaiy_os_connector_sp_api import app_config as config
 from alaiy_os_connector_sp_api.spapi import health
 from alaiy_os_connector_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
