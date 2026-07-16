@@ -29,15 +29,24 @@ def _require_manager():
 def get_connection_status():
 	"""Return the current connection status (never exposes the token)."""
 	conn = frappe.get_cached_doc("Amazon Connection")
+	marketplace_id = None
+	if conn.primary_marketplace:
+		marketplace_id = frappe.db.get_value(
+			"Amazon Marketplace", conn.primary_marketplace, "marketplace_id"
+		)
 	return {
 		"status": conn.last_status or "not_configured",
 		"message": conn.last_status_message,
 		"connected": conn.is_connected(),
 		"selling_partner_id": conn.selling_partner_id,
-		"region": conn.region,
+		"region": config.resolve_region(conn.region),
+		"endpoint": config.resolve_endpoint(conn.region),
+		"consent_base_url": config.consent_base_url(conn.region),
+		"use_sandbox": config.use_sandbox(),
 		"app_status": conn.app_status,
 		"connected_at": conn.connected_at,
 		"primary_marketplace": conn.primary_marketplace,
+		"primary_marketplace_id": marketplace_id,
 	}
 
 

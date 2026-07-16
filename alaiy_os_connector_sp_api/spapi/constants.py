@@ -17,6 +17,13 @@ REGION_ENDPOINTS = {
 	"FE": "https://sellingpartnerapi-fe.amazon.com",
 }
 
+# region -> SP-API sandbox host (used when amazon_use_sandbox is set).
+SANDBOX_ENDPOINTS = {
+	"NA": "https://sandbox.sellingpartnerapi-na.amazon.com",
+	"EU": "https://sandbox.sellingpartnerapi-eu.amazon.com",
+	"FE": "https://sandbox.sellingpartnerapi-fe.amazon.com",
+}
+
 # region -> default Seller Central consent host. Used to build the OAuth
 # consent URL when `amazon_consent_base_url` is not set in site_config.
 REGION_CONSENT_HOSTS = {
@@ -115,6 +122,17 @@ DEFAULT_MARKETPLACES = [
 	("APJ6JRA9NG5V4", "Italy", "IT", "EU", "EUR", "amazon.it"),
 	("A1RKKUPIHCS9HS", "Spain", "ES", "EU", "EUR", "amazon.es"),
 	("A1805IZSGTT6HS", "Netherlands", "NL", "EU", "EUR", "amazon.nl"),
+	("A1C3SOZRARQ6R3", "Poland", "PL", "EU", "PLN", "amazon.pl"),
+	("A2NODRKZP88ZB9", "Sweden", "SE", "EU", "SEK", "amazon.se"),
+	("AMEN7PMS3EDWL", "Belgium", "BE", "EU", "EUR", "amazon.com.be"),
+	("A28R8C7NBKEWEA", "Ireland", "IE", "EU", "EUR", "amazon.ie"),
+	("A21TJRUUN4KGV", "India", "IN", "EU", "INR", "amazon.in"),
+	("A2VIGQ35RCS4UG", "United Arab Emirates", "AE", "EU", "AED", "amazon.ae"),
+	("A17E79C6D8DWNP", "Saudi Arabia", "SA", "EU", "SAR", "amazon.sa"),
+	("ARBP9OOSHTCHU", "Egypt", "EG", "EU", "EGP", "amazon.eg"),
+	("A33AVAJ2PDY3EV", "Turkey", "TR", "EU", "TRY", "amazon.com.tr"),
+	("A2Q3Y263D00KWC", "Brazil", "BR", "NA", "BRL", "amazon.com.br"),
+	("A19VAU5U5O7RUS", "Singapore", "SG", "FE", "SGD", "amazon.sg"),
 	("A1VC38T7YXB528", "Japan", "JP", "FE", "JPY", "amazon.co.jp"),
 	("A39IBJ37TRP1C6", "Australia", "AU", "FE", "AUD", "amazon.com.au"),
 ]

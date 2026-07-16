@@ -39,6 +39,25 @@ bench --site <site> set-config app_url "https://erp.example.com" # else the site
 | `amazon_app_beta` | no | `1` while the app is in Draft (adds `version=beta`) |
 | `amazon_consent_base_url` | no | Seller Central consent host; falls back to the region default |
 | `app_url` | no | Base URL for the OAuth redirect URI; falls back to the site URL |
+| `amazon_region` | no | `NA` / `EU` / `FE`; overrides the region on the Amazon Connection |
+| `amazon_endpoint` | no | Full SP-API base URL; overrides the region/sandbox default |
+| `amazon_use_sandbox` | no | `1` to call the SP-API sandbox host for the region |
+
+**SP-API target resolution.** The API base URL is resolved as: `amazon_endpoint`
+(if set) → the sandbox host when `amazon_use_sandbox=1` → otherwise the region
+default. Region is `amazon_region` if set, else the Amazon Connection's region.
+The consent host is `amazon_consent_base_url` if set, else the region default.
+The resolved endpoint/consent host are shown on the Amazon Connection form and
+returned by `api.get_connection_status`.
+
+Example — an **India** (amazon.in) seller. India is in the **EU** region group
+and consents on its local Seller Central:
+
+```bash
+bench --site <site> set-config amazon_region "EU"
+bench --site <site> set-config amazon_consent_base_url "https://sellercentral.amazon.in"
+# then set the Amazon Connection's Primary Marketplace to India (A21TJRUUN4KGV).
+```
 
 Register the redirect URL in Seller Central → Develop Apps as
 `{app_url}/amazon-oauth/callback`.

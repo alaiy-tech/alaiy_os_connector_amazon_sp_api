@@ -5,13 +5,14 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import now_datetime
 
-from alaiy_os_connector_sp_api.spapi.constants import REGION_ENDPOINTS
+from alaiy_os_connector_sp_api import app_config as config
 
 
 class AmazonConnection(Document):
 	def validate(self):
-		# Endpoint is always derived from the region.
-		self.endpoint = REGION_ENDPOINTS.get(self.region or "NA")
+		# Endpoint shown here is the resolved SP-API target: a site_config
+		# override/sandbox wins, else the region default (see app_config).
+		self.endpoint = config.resolve_endpoint(self.region)
 		if not self.get_password("refresh_token", raise_exception=False):
 			# No token yet -> not configured (unless an error was already recorded).
 			if self.last_status != "error":

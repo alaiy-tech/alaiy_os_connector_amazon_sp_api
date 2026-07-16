@@ -18,7 +18,6 @@ from alaiy_os_connector_sp_api.spapi import auth
 from alaiy_os_connector_sp_api.spapi.constants import (
 	BACKOFF_BASE,
 	MAX_RETRIES,
-	REGION_ENDPOINTS,
 )
 
 # Jitter is deterministic-per-attempt (no Math.random dependency); a simple
@@ -66,11 +65,15 @@ class SpApiClient:
 
 	@property
 	def base_url(self):
-		region = self.connection.region or "NA"
-		endpoint = self.connection.endpoint or REGION_ENDPOINTS.get(region)
+		from alaiy_os_connector_sp_api import app_config as config
+
+		endpoint = config.resolve_endpoint(self.connection.region)
 		if not endpoint:
-			frappe.throw(f"No SP-API endpoint configured for region {region}.")
-		return endpoint.rstrip("/")
+			frappe.throw(
+				f"No SP-API endpoint configured for region "
+				f"{config.resolve_region(self.connection.region)}."
+			)
+		return endpoint
 
 	def _refresh_token(self):
 		token = self.connection.get_password("refresh_token", raise_exception=False)

@@ -16,7 +16,11 @@ Secret values are read here and never returned to the client; use
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api.spapi.constants import REGION_CONSENT_HOSTS
+from alaiy_os_connector_sp_api.spapi.constants import (
+	REGION_CONSENT_HOSTS,
+	REGION_ENDPOINTS,
+	SANDBOX_ENDPOINTS,
+)
 
 # Config key metadata. `required` gates the OAuth flow; `secret` keeps a value
 # from ever being echoed back to the client.
@@ -63,6 +67,27 @@ CONFIG_KEYS = [
 		"secret": False,
 		"description": "Set to 1 while the SP-API app is in Draft to request version=beta.",
 	},
+	{
+		"key": "amazon_region",
+		"label": "SP-API Region",
+		"required": False,
+		"secret": False,
+		"description": "NA / EU / FE. Overrides the region on the Amazon Connection when set.",
+	},
+	{
+		"key": "amazon_endpoint",
+		"label": "SP-API Endpoint Override",
+		"required": False,
+		"secret": False,
+		"description": "Full API base URL. Overrides the region/sandbox default (e.g. for testing).",
+	},
+	{
+		"key": "amazon_use_sandbox",
+		"label": "Use Sandbox",
+		"required": False,
+		"secret": False,
+		"description": "Set to 1 to call the SP-API sandbox host for the region.",
+	},
 ]
 
 REQUIRED_KEYS = [c["key"] for c in CONFIG_KEYS if c["required"]]
@@ -88,13 +113,46 @@ def app_url():
 	return (get("app_url") or frappe.utils.get_url()).rstrip("/")
 
 
-def consent_base_url(region):
-	base = get("amazon_consent_base_url") or REGION_CONSENT_HOSTS.get(region or "NA")
-	return base.rstrip("/") if base else None
-
-
 def app_beta():
 	return bool(get("amazon_app_beta"))
+
+
+# --- SP-API target resolution ------------------------------------------------
+# Region and endpoint are configurable via site_config and take precedence over
+# the Amazon Connection's own region field, so the whole SP-API target can be
+# driven from config (region default, sandbox, or a full endpoint override).
+def region_override():
+	return get("amazon_region")
+
+
+def endpoint_override():
+	return get("amazon_endpoint")
+
+
+def use_sandbox():
+	return bool(get("amazon_use_sandbox"))
+
+
+def resolve_region(connection_region=None):
+	"""site_config amazon_region wins, else the connection's region, else NA."""
+	return region_override() or connection_region or "NA"
+
+
+def resolve_endpoint(connection_region=None):
+	"""The API base URL actually called: explicit override > sandbox > region default."""
+	override = endpoint_override()
+	if override:
+		return override.rstrip("/")
+	region = resolve_region(connection_region)
+	table = SANDBOX_ENDPOINTS if use_sandbox() else REGION_ENDPOINTS
+	endpoint = table.get(region)
+	return endpoint.rstrip("/") if endpoint else None
+
+
+def consent_base_url(connection_region=None):
+	region = resolve_region(connection_region)
+	base = get("amazon_consent_base_url") or REGION_CONSENT_HOSTS.get(region)
+	return base.rstrip("/") if base else None
 
 
 def missing_required():
