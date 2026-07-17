@@ -32,6 +32,20 @@ REGION_CONSENT_HOSTS = {
 	"FE": "https://sellercentral.amazon.co.jp",
 }
 
+# --- Catalog & Listings Items APIs ------------------------------------------
+CATALOG_ITEMS_PATH = "/catalog/2022-04-01/items"
+LISTINGS_ITEMS_BASE = "/listings/2021-08-01/items"
+
+# Locale for human-readable issue messages returned by the Listings API.
+DEFAULT_ISSUE_LOCALE = "en_US"
+
+# fulfillment_channel_code sent in the fulfillment_availability attribute.
+# DEFAULT = merchant-fulfilled (MFN); AMAZON = FBA (quantity managed by Amazon).
+FULFILLMENT_CHANNEL_CODES = {
+	"DEFAULT": "DEFAULT",
+	"AMAZON": "AMAZON_NA",
+}
+
 # --- Report types (Reports API 2021-06-30) ----------------------------------
 REPORT_SELLER_PERFORMANCE = "GET_V2_SELLER_PERFORMANCE_REPORT"
 REPORT_SELLER_FEEDBACK = "GET_SELLER_FEEDBACK_DATA"

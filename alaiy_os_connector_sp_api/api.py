@@ -2,16 +2,17 @@
 # For license information, please see license.txt
 """Whitelisted entry points for Desk/JS. All SP-API access is server-side.
 
-Phase 1 surface: connection status, connect URL, disconnect, ping, health sync
-and the health summary. Listing CRUD (Phase 2) and reconcile (Phase 3) will be
-added here.
+Phase 1: connection status, connect URL, disconnect, ping, health sync/summary.
+Phase 2: catalog search + listing create/update/delete/sync.
 """
+
+import json
 
 import frappe
 from frappe import _
 
 from alaiy_os_connector_sp_api import app_config as config
-from alaiy_os_connector_sp_api.spapi import health
+from alaiy_os_connector_sp_api.spapi import health, listings
 from alaiy_os_connector_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
 )
@@ -154,3 +155,61 @@ def get_health_summary(marketplace=None):
 		"feedback": feedback,
 		"synced_at": synced_at,
 	}
+
+
+# --- listings (Phase 2) ------------------------------------------------------
+@frappe.whitelist()
+def search_catalog(query, marketplace=None, page_size=10):
+	"""Search the Amazon catalog for an ASIN + product type."""
+	_require_manager()
+	return listings.search_catalog(query, marketplace=marketplace, page_size=page_size)
+
+
+@frappe.whitelist()
+def create_listing(
+	sku,
+	asin,
+	product_type,
+	price=None,
+	quantity=None,
+	condition="new_new",
+	marketplace=None,
+	fulfillment_channel="DEFAULT",
+	product=None,
+):
+	"""Publish an offer for an existing ASIN and upsert the Amazon Listing row."""
+	_require_manager()
+	return listings.create_listing(
+		sku,
+		asin=asin,
+		product_type=product_type,
+		price=price,
+		quantity=quantity,
+		condition=condition,
+		marketplace=marketplace,
+		fulfillment_channel=fulfillment_channel,
+		product=product,
+	)
+
+
+@frappe.whitelist()
+def update_listing(sku, changes, marketplace=None):
+	"""Update price/quantity/condition on an existing listing (PATCH, PUT fallback)."""
+	_require_manager()
+	if isinstance(changes, str):
+		changes = json.loads(changes)
+	return listings.update_listing(sku, changes, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def delete_listing(sku, marketplace=None):
+	"""End a listing on Amazon; keeps the row as inactive."""
+	_require_manager()
+	return listings.delete_listing(sku, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def sync_listing(sku, marketplace=None):
+	"""Re-fetch one listing from Amazon and refresh its register row."""
+	_require_manager()
+	return listings.sync_listing(sku, marketplace=marketplace)

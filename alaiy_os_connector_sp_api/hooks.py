@@ -26,7 +26,11 @@ alaiy_os_sidebar_log_items = [
 
 # Desk client scripts
 # -------------------
-doctype_js = {"Amazon Connection": "public/js/amazon_connection.js"}
+doctype_js = {
+	"Amazon Connection": "public/js/amazon_connection.js",
+	"Amazon Listing": "public/js/amazon_listing.js",
+}
+doctype_list_js = {"Amazon Listing": "public/js/amazon_listing_list.js"}
 
 # Website routes (clean, hyphenated OAuth URLs -> www page controllers)
 # ---------------------------------------------------------------------
