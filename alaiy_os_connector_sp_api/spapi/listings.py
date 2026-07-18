@@ -344,6 +344,16 @@ def get_listing_item(sku, marketplace=None):
 	try:
 		return client.get(_seller_path(conn.selling_partner_id, sku), params=params, context="listing")
 	except SpApiError as e:
+		if e.status_code == 404:
+			frappe.throw(
+				_(
+					"SKU '{0}' is not a listing on this Amazon account (marketplace {1}). "
+					"Sync only works for SKUs you already have in Seller Central — this must be a "
+					"seller SKU, not a UPC/EAN or ASIN. To create a new offer, use Search Catalog "
+					"then Publish Offer."
+				).format(sku, mp.country or mp.marketplace_id),
+				title=_("Listing not found"),
+			)
 		_handle_forbidden(e)
 
 
