@@ -367,10 +367,17 @@ def _derive_status(summary, issues):
 
 
 def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, product_type=None):
-	"""Fetch the item from Amazon and upsert the Amazon Listing register row."""
+	"""Fetch one item from Amazon and upsert the Amazon Listing register row."""
 	mp = _marketplace(marketplace)
 	item = get_listing_item(sku, marketplace=mp.name)
+	return _upsert_from_item(
+		sku, mp, item, product=product, fulfillment_channel=fulfillment_channel, product_type=product_type
+	)
 
+
+def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, product_type=None):
+	"""Upsert an Amazon Listing row from a Listings-Items payload (single GET or
+	a searchListingsItems entry — both share the summaries/issues/offers shape)."""
 	summaries = item.get("summaries") or []
 	summary = summaries[0] if summaries else {}
 	issues = _issues_from(item)
@@ -424,3 +431,77 @@ def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, 
 	row.flags.ignore_permissions = True
 	row.save(ignore_permissions=True)
 	return {"sku": sku, "listing_status": row.listing_status, "issues": issues}
+
+
+# --- bulk sync (searchListingsItems) -----------------------------------------
+# searchListingsItems returns at most 1000 SKUs per marketplace; a larger
+# catalog needs the Merchant Listings report path (not built yet).
+SEARCH_PAGE_SIZE = 20
+SEARCH_MAX_PAGES = 60  # safety cap (1000-SKU limit reached well before this)
+
+
+def _search_listings_items(mp, client, page_token=None):
+	params = {
+		"marketplaceIds": mp.marketplace_id,
+		"includedData": "summaries,issues,offers,fulfillmentAvailability",
+		"pageSize": SEARCH_PAGE_SIZE,
+		"issueLocale": DEFAULT_ISSUE_LOCALE,
+	}
+	if page_token:
+		params["pageToken"] = page_token
+	conn = frappe.get_cached_doc("Amazon Connection")
+	path = f"{LISTINGS_ITEMS_BASE}/{conn.selling_partner_id}"
+	try:
+		return client.get(path, params=params, context="reconcile")
+	except SpApiError as e:
+		_handle_forbidden(e)
+
+
+def sync_all_listings(marketplace=None, notify_user=None):
+	"""Page through every listing on the primary marketplace and upsert each.
+
+	Intended to run as a background job. Publishes an `amazon_sync_all_complete`
+	realtime event to `notify_user` when done.
+	"""
+	conn = _connection()
+	mp = _marketplace(marketplace)
+	client = SpApiClient(conn)
+
+	total = 0
+	by_status = {}
+	page_token = None
+	truncated = False
+
+	try:
+		for page in range(SEARCH_MAX_PAGES):
+			resp = _search_listings_items(mp, client, page_token=page_token)
+			for item in resp.get("items", []) or []:
+				sku = item.get("sku")
+				if not sku:
+					continue
+				result = _upsert_from_item(sku, mp, item)
+				total += 1
+				status = result["listing_status"]
+				by_status[status] = by_status.get(status, 0) + 1
+			frappe.db.commit()  # persist each page as we go
+			page_token = (resp.get("pagination") or {}).get("nextToken")
+			if not page_token:
+				break
+			if page == SEARCH_MAX_PAGES - 1:
+				truncated = True
+
+		summary = {
+			"success": True,
+			"marketplace": mp.name,
+			"synced": total,
+			"by_status": by_status,
+			"truncated": truncated,
+		}
+	except Exception as e:
+		frappe.db.rollback()
+		frappe.log_error(title="Amazon sync-all failed", message=frappe.get_traceback())
+		summary = {"success": False, "marketplace": mp.name, "synced": total, "error": str(e)}
+
+	if notify_user:
+		frappe.publish_realtime("amazon_sync_all_complete", summary, user=notify_user)
+	return summary

@@ -213,3 +213,26 @@ def sync_listing(sku, marketplace=None):
 	"""Re-fetch one listing from Amazon and refresh its register row."""
 	_require_manager()
 	return listings.sync_listing(sku, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def sync_all_listings(marketplace=None):
+	"""Pull all listings for the (primary) marketplace into the register.
+
+	Runs in the background — a catalog can be up to 1,000 SKUs, too slow for a
+	blocking request. The caller is notified via the `amazon_sync_all_complete`
+	realtime event when it finishes.
+	"""
+	_require_manager()
+	conn = frappe.get_cached_doc("Amazon Connection")
+	if not conn.is_connected():
+		frappe.throw(_("Amazon account is not connected."))
+
+	frappe.enqueue(
+		"alaiy_os_connector_sp_api.spapi.listings.sync_all_listings",
+		queue="long",
+		timeout=1500,
+		marketplace=marketplace,
+		notify_user=frappe.session.user,
+	)
+	return {"queued": True}
