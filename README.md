@@ -1,18 +1,83 @@
-### Alaiy Os Connector Amazon Sp Api
+# Alaiy OS Connector — Amazon SP-API
 
-AlaiyOS Connector to interact with SP API
+> A [Frappe](https://frappeframework.com/) app that connects [AlaiyOS](https://github.com/alaiy-tech) to the [Amazon Selling Partner API](https://developer-docs.amazon.com/sp-api/) — manage listings, track account health, and keep listing state in sync, all from within Desk.
 
-### Installation
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Frappe](https://img.shields.io/badge/Frappe-v16-informational)](https://frappeframework.com/)
+[![Python](https://img.shields.io/badge/Python-3.14%2B-blue)](https://www.python.org/)
 
-You can install this app using the [bench](https://github.com/frappe/bench) CLI:
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Connecting a Seller Account](#connecting-a-seller-account)
+- [Usage](#usage)
+- [Scheduled Tasks](#scheduled-tasks)
+- [Security](#security)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Overview
+
+`alaiy_os_connector_amazon_sp_api` registers itself with the AlaiyOS OS Connector
+Registry as an Amazon **channel** connector. It handles the full OAuth handshake
+with Login with Amazon, stores only the returned (encrypted) refresh token, and
+exposes server-side, role-guarded entry points for catalog and account-health
+operations. No SP-API calls are ever made from the browser.
+
+## Features
+
+- **Login with Amazon OAuth** — sellers authorize via Amazon's consent screen; the app never handles a long-lived seller secret.
+- **Account health monitoring** — syncs health metrics and recent seller feedback per marketplace, with an overall status roll-up.
+- **Listing management** — catalog search (ASIN + product type), create/update/delete offers, and per-SKU or full-catalog sync.
+- **Multi-region support** — `NA` / `EU` / `FE` region groups, with sandbox and custom-endpoint overrides.
+- **Auditable** — every SP-API call is captured in the **SP-API Log** DocType.
+- **Scheduled sync** — daily health sync, hourly connection preflight, and a periodic listing reconcile hook.
+
+## Architecture
+
+| Module | Responsibility |
+| --- | --- |
+| `api.py` | Whitelisted entry points for Desk/JS (all access is server-side and role-guarded). |
+| `oauth.py`, `www/amazon_oauth_*` | Login with Amazon consent + callback flow. |
+| `app_config.py` | Resolves credentials, region, endpoint, and consent host from `site_config.json`. |
+| `spapi/` | SP-API client: `auth`, `client`, `listings`, `health`, `reports`, `constants`. |
+| `tasks.py` | Scheduled jobs (health sync, connection refresh, listing reconcile). |
+| `connector_meta.py` | Registration metadata for the AlaiyOS OS Connector Registry. |
+
+### DocTypes
+
+| DocType | Purpose |
+| --- | --- |
+| **Amazon Connection** (single) | Connection settings, region, primary marketplace, and connection status. |
+| **Amazon Marketplace** | Reference list of Amazon marketplaces and their IDs. |
+| **Amazon Listing** | Register of managed listings and their state. |
+| **Amazon Listing Issue** | Issues reported by Amazon against a listing. |
+| **Account Health Metric** | Synced account-health metrics per marketplace. |
+| **Seller Feedback** | Recent seller feedback pulled from Amazon. |
+| **SP-API Log** | Audit log of every SP-API request/response. |
+
+## Requirements
+
+- A [Frappe Bench](https://github.com/frappe/bench) v16 environment
+- Python 3.14+
+- An approved [Amazon SP-API application](https://developer-docs.amazon.com/sp-api/docs/registering-your-application) (Login with Amazon credentials)
+
+## Installation
+
+Install with the [bench](https://github.com/frappe/bench) CLI:
 
 ```bash
 cd $PATH_TO_YOUR_BENCH
-bench get-app $URL_OF_THIS_REPO --branch version-16
+bench get-app https://github.com/alaiy-tech/alaiy_os_connector_sp_api --branch version-16
 bench install-app alaiy_os_connector_amazon_sp_api
 ```
 
-### Configuration
+## Configuration
 
 App identity (the SP-API *application's* own credentials) lives in
 `site_config.json` — never in DocTypes and never in the browser. The seller
@@ -62,25 +127,80 @@ bench --site <site> set-config amazon_consent_base_url "https://sellercentral.am
 Register the redirect URL in Seller Central → Develop Apps as
 `{app_url}/amazon-oauth/callback`.
 
-The **Amazon Connection** form shows which required keys are still missing and
-only enables **Connect** once all are set (see `alaiy_os_connector_amazon_sp_api.app_config`).
+## Connecting a Seller Account
 
-### Contributing
+1. Open the **Amazon Connection** form in Desk. It shows which required
+   `site_config` keys are still missing and only enables **Connect** once all
+   are set (see `alaiy_os_connector_amazon_sp_api.app_config`).
+2. Set the **Region** and **Primary Marketplace**.
+3. Click **Connect** — you are redirected to Amazon's consent screen.
+4. After authorizing, Amazon redirects back to `{app_url}/amazon-oauth/callback`
+   and the encrypted refresh token is stored.
+5. Use **Test Connection** (or the OS Settings → Connectors panel) to verify.
 
-This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:
+## Usage
+
+All operations run server-side through whitelisted methods in
+[`api.py`](alaiy_os_connector_amazon_sp_api/api.py), guarded by the
+`System Manager` or `Amazon Manager` role. Key entry points:
+
+| Method | Description |
+| --- | --- |
+| `get_connection_status` | Current status (never exposes the token). |
+| `get_connect_url` / `disconnect` | Start OAuth / clear the stored token. |
+| `ping` / `test_connection` | Verify the connection via a preflight. |
+| `sync_health` / `get_health_summary` | Sync and read account-health metrics + feedback. |
+| `search_catalog` | Search the Amazon catalog for an ASIN + product type. |
+| `create_listing` / `update_listing` / `delete_listing` | Manage offers for a SKU. |
+| `sync_listing` / `sync_all_listings` | Refresh one listing, or the whole catalog (background job). |
+
+`sync_all_listings` runs in the background (a catalog can be up to 1,000 SKUs)
+and emits the `amazon_sync_all_complete` realtime event to the caller when done.
+
+## Scheduled Tasks
+
+Defined in [`tasks.py`](alaiy_os_connector_amazon_sp_api/tasks.py); all no-op
+cleanly when the connection is not configured.
+
+| Schedule | Job | Description |
+| --- | --- | --- |
+| Daily | `sync_health` | Refresh account-health metrics + feedback for the primary marketplace. |
+| Hourly | `refresh_connection_status` | Ping preflight and update `last_status`. |
+| Every 6h | `reconcile_listings` | Rebuild active/inactive/suppressed listing state *(Phase 3 — not yet implemented)*. |
+
+On a scheduled failure, users with the **Amazon Manager** role receive a
+best-effort email alert.
+
+## Security
+
+- SP-API app credentials live only in `site_config.json`, never in DocTypes or the browser.
+- The seller's refresh token is stored **encrypted** and never returned to the client.
+- All whitelisted API methods require the `System Manager` or `Amazon Manager` role.
+- Every SP-API request is recorded in the **SP-API Log** for audit.
+
+## Contributing
+
+This app uses `pre-commit` for code formatting and linting. Please
+[install pre-commit](https://pre-commit.com/#installation) and enable it for
+this repository:
 
 ```bash
 cd apps/alaiy_os_connector_amazon_sp_api
 pre-commit install
 ```
 
-Pre-commit is configured to use the following tools for checking and formatting your code:
+Pre-commit is configured to use the following tools for checking and formatting
+your code:
 
-- ruff
-- eslint
-- prettier
-- pyupgrade
+- [ruff](https://github.com/astral-sh/ruff)
+- [eslint](https://eslint.org/)
+- [prettier](https://prettier.io/)
+- [pyupgrade](https://github.com/asottile/pyupgrade)
 
-### License
+Bug reports and feature requests are welcome via
+[GitHub Issues](https://github.com/alaiy-tech/alaiy_os_connector_sp_api/issues)
+(templates provided). Please open a pull request against the `version-16` branch.
 
-agpl-3.0
+## License
+
+[GNU Affero General Public License v3.0](license.txt) (AGPL-3.0).
