@@ -73,7 +73,7 @@ Install with the [bench](https://github.com/frappe/bench) CLI:
 
 ```bash
 cd $PATH_TO_YOUR_BENCH
-bench get-app https://github.com/alaiy-tech/alaiy_os_connector_sp_api --branch version-16
+bench get-app https://github.com/alaiy-tech/alaiy_os_connector_sp_api 
 bench install-app alaiy_os_connector_amazon_sp_api
 ```
 
@@ -199,7 +199,7 @@ your code:
 
 Bug reports and feature requests are welcome via
 [GitHub Issues](https://github.com/alaiy-tech/alaiy_os_connector_sp_api/issues)
-(templates provided). Please open a pull request against the `version-16` branch.
+(templates provided). Please open a pull request.
 
 ## License
 
