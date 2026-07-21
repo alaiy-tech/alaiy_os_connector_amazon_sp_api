@@ -111,7 +111,7 @@
  "links": [],
  "modified": "2026-07-16 00:00:00.000000",
  "modified_by": "Administrator",
- "module": "Alaiy Os Connector Sp Api",
+ "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Account Health Metric",
  "owner": "Administrator",
  "permissions": [

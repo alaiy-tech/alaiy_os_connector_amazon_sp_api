@@ -1,4 +1,4 @@
-### Alaiy Os Connector Sp Api
+### Alaiy Os Connector Amazon Sp Api
 
 AlaiyOS Connector to interact with SP API
 

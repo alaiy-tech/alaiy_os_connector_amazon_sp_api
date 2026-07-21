@@ -1,5 +1,5 @@
 app_name = "alaiy_os_connector_amazon_sp_api"
-app_title = "Alaiy Os Connector Sp Api"
+app_title = "Alaiy Os Connector Amazon Sp Api"
 app_publisher = "Alaiy"
 app_description = "AlaiyOS Connector to interact with SP API"
 app_email = "mail@alaiy.com"
@@ -66,7 +66,7 @@ scheduler_events = {
 # 	{
 # 		"name": "alaiy_os_connector_amazon_sp_api",
 # 		"logo": "/assets/alaiy_os_connector_amazon_sp_api/logo.png",
-# 		"title": "Alaiy Os Connector Sp Api",
+# 		"title": "Alaiy Os Connector Amazon Sp Api",
 # 		"route": "/alaiy_os_connector_amazon_sp_api",
 # 		"has_permission": "alaiy_os_connector_amazon_sp_api.api.permission.has_app_permission"
 # 	}
