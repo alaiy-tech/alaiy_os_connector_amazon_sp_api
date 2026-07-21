@@ -11,9 +11,9 @@ import json
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api import app_config as config
-from alaiy_os_connector_sp_api.spapi import health, listings
-from alaiy_os_connector_sp_api.spapi.constants import (
+from alaiy_os_connector_amazon_sp_api import app_config as config
+from alaiy_os_connector_amazon_sp_api.spapi import health, listings
+from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
 )
 
@@ -229,7 +229,7 @@ def sync_all_listings(marketplace=None):
 		frappe.throw(_("Amazon account is not connected."))
 
 	frappe.enqueue(
-		"alaiy_os_connector_sp_api.spapi.listings.sync_all_listings",
+		"alaiy_os_connector_amazon_sp_api.spapi.listings.sync_all_listings",
 		queue="long",
 		timeout=1500,
 		marketplace=marketplace,

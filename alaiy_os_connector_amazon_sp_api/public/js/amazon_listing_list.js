@@ -64,7 +64,7 @@ frappe.listview_settings["Amazon Listing"] = {
 				__("Pull all listings from the primary marketplace into the register?"),
 				() => {
 					frappe.call({
-						method: "alaiy_os_connector_sp_api.api.sync_all_listings",
+						method: "alaiy_os_connector_amazon_sp_api.api.sync_all_listings",
 						callback: () => {
 							frappe.show_alert({
 								message: __("Sync started — you'll be notified when it completes."),

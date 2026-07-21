@@ -1,4 +1,4 @@
-app_name = "alaiy_os_connector_sp_api"
+app_name = "alaiy_os_connector_amazon_sp_api"
 app_title = "Alaiy Os Connector Sp Api"
 app_publisher = "Alaiy"
 app_description = "AlaiyOS Connector to interact with SP API"
@@ -7,15 +7,15 @@ app_license = "agpl-3.0"
 
 # Installation
 # ------------
-after_install = "alaiy_os_connector_sp_api.setup.install.after_install"
-after_migrate = "alaiy_os_connector_sp_api.setup.install.after_migrate"
+after_install = "alaiy_os_connector_amazon_sp_api.setup.install.after_install"
+after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 
 # AlaiyOS integration
 # -------------------
 # Re-inject the Amazon sidebar section whenever the core rebuilds the OS sidebar.
 doc_events = {
 	"Workspace Sidebar": {
-		"on_update": "alaiy_os_connector_sp_api.setup.install._on_sidebar_update",
+		"on_update": "alaiy_os_connector_amazon_sp_api.setup.install._on_sidebar_update",
 	}
 }
 
@@ -43,15 +43,15 @@ website_route_rules = [
 # ---------------
 scheduler_events = {
 	"daily": [
-		"alaiy_os_connector_sp_api.tasks.sync_health",
+		"alaiy_os_connector_amazon_sp_api.tasks.sync_health",
 	],
 	"hourly": [
-		"alaiy_os_connector_sp_api.tasks.refresh_connection_status",
+		"alaiy_os_connector_amazon_sp_api.tasks.refresh_connection_status",
 	],
 	"cron": {
 		# Every 6 hours: rebuild listing state (Phase 3).
 		"0 */6 * * *": [
-			"alaiy_os_connector_sp_api.tasks.reconcile_listings",
+			"alaiy_os_connector_amazon_sp_api.tasks.reconcile_listings",
 		],
 	},
 }
@@ -64,11 +64,11 @@ scheduler_events = {
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
 # 	{
-# 		"name": "alaiy_os_connector_sp_api",
-# 		"logo": "/assets/alaiy_os_connector_sp_api/logo.png",
+# 		"name": "alaiy_os_connector_amazon_sp_api",
+# 		"logo": "/assets/alaiy_os_connector_amazon_sp_api/logo.png",
 # 		"title": "Alaiy Os Connector Sp Api",
-# 		"route": "/alaiy_os_connector_sp_api",
-# 		"has_permission": "alaiy_os_connector_sp_api.api.permission.has_app_permission"
+# 		"route": "/alaiy_os_connector_amazon_sp_api",
+# 		"has_permission": "alaiy_os_connector_amazon_sp_api.api.permission.has_app_permission"
 # 	}
 # ]
 
@@ -76,15 +76,15 @@ scheduler_events = {
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/alaiy_os_connector_sp_api/css/alaiy_os_connector_sp_api.css"
-# app_include_js = "/assets/alaiy_os_connector_sp_api/js/alaiy_os_connector_sp_api.js"
+# app_include_css = "/assets/alaiy_os_connector_amazon_sp_api/css/alaiy_os_connector_amazon_sp_api.css"
+# app_include_js = "/assets/alaiy_os_connector_amazon_sp_api/js/alaiy_os_connector_amazon_sp_api.js"
 
 # include js, css files in header of web template
-# web_include_css = "/assets/alaiy_os_connector_sp_api/css/alaiy_os_connector_sp_api.css"
-# web_include_js = "/assets/alaiy_os_connector_sp_api/js/alaiy_os_connector_sp_api.js"
+# web_include_css = "/assets/alaiy_os_connector_amazon_sp_api/css/alaiy_os_connector_amazon_sp_api.css"
+# web_include_js = "/assets/alaiy_os_connector_amazon_sp_api/js/alaiy_os_connector_amazon_sp_api.js"
 
 # include custom scss in every website theme (without file extension ".scss")
-# website_theme_scss = "alaiy_os_connector_sp_api/public/scss/website"
+# website_theme_scss = "alaiy_os_connector_amazon_sp_api/public/scss/website"
 
 # include js, css files in header of web form
 # webform_include_js = {"doctype": "public/js/doctype.js"}
@@ -102,7 +102,7 @@ scheduler_events = {
 # Svg Icons
 # ------------------
 # include app icons in desk
-# app_include_icons = "alaiy_os_connector_sp_api/public/icons.svg"
+# app_include_icons = "alaiy_os_connector_amazon_sp_api/public/icons.svg"
 
 # Home Pages
 # ----------
@@ -129,49 +129,49 @@ scheduler_events = {
 
 # add methods and filters to jinja environment
 # jinja = {
-# 	"methods": "alaiy_os_connector_sp_api.utils.jinja_methods",
-# 	"filters": "alaiy_os_connector_sp_api.utils.jinja_filters"
+# 	"methods": "alaiy_os_connector_amazon_sp_api.utils.jinja_methods",
+# 	"filters": "alaiy_os_connector_amazon_sp_api.utils.jinja_filters"
 # }
 
 # Installation
 # ------------
 
-# before_install = "alaiy_os_connector_sp_api.install.before_install"
-# after_install = "alaiy_os_connector_sp_api.install.after_install"
+# before_install = "alaiy_os_connector_amazon_sp_api.install.before_install"
+# after_install = "alaiy_os_connector_amazon_sp_api.install.after_install"
 
 # Uninstallation
 # ------------
 
-# before_uninstall = "alaiy_os_connector_sp_api.uninstall.before_uninstall"
-# after_uninstall = "alaiy_os_connector_sp_api.uninstall.after_uninstall"
+# before_uninstall = "alaiy_os_connector_amazon_sp_api.uninstall.before_uninstall"
+# after_uninstall = "alaiy_os_connector_amazon_sp_api.uninstall.after_uninstall"
 
 # Integration Setup
 # ------------------
 # To set up dependencies/integrations with other apps
 # Name of the app being installed is passed as an argument
 
-# before_app_install = "alaiy_os_connector_sp_api.utils.before_app_install"
-# after_app_install = "alaiy_os_connector_sp_api.utils.after_app_install"
+# before_app_install = "alaiy_os_connector_amazon_sp_api.utils.before_app_install"
+# after_app_install = "alaiy_os_connector_amazon_sp_api.utils.after_app_install"
 
 # Integration Cleanup
 # -------------------
 # To clean up dependencies/integrations with other apps
 # Name of the app being uninstalled is passed as an argument
 
-# before_app_uninstall = "alaiy_os_connector_sp_api.utils.before_app_uninstall"
-# after_app_uninstall = "alaiy_os_connector_sp_api.utils.after_app_uninstall"
+# before_app_uninstall = "alaiy_os_connector_amazon_sp_api.utils.before_app_uninstall"
+# after_app_uninstall = "alaiy_os_connector_amazon_sp_api.utils.after_app_uninstall"
 
 # Build
 # ------------------
 # To hook into the build process
 
-# after_build = "alaiy_os_connector_sp_api.build.after_build"
+# after_build = "alaiy_os_connector_amazon_sp_api.build.after_build"
 
 # Desk Notifications
 # ------------------
 # See frappe.core.notifications.get_notification_config
 
-# notification_config = "alaiy_os_connector_sp_api.notifications.get_notification_config"
+# notification_config = "alaiy_os_connector_amazon_sp_api.notifications.get_notification_config"
 
 # Permissions
 # -----------
@@ -202,47 +202,47 @@ scheduler_events = {
 
 # scheduler_events = {
 # 	"all": [
-# 		"alaiy_os_connector_sp_api.tasks.all"
+# 		"alaiy_os_connector_amazon_sp_api.tasks.all"
 # 	],
 # 	"daily": [
-# 		"alaiy_os_connector_sp_api.tasks.daily"
+# 		"alaiy_os_connector_amazon_sp_api.tasks.daily"
 # 	],
 # 	"hourly": [
-# 		"alaiy_os_connector_sp_api.tasks.hourly"
+# 		"alaiy_os_connector_amazon_sp_api.tasks.hourly"
 # 	],
 # 	"weekly": [
-# 		"alaiy_os_connector_sp_api.tasks.weekly"
+# 		"alaiy_os_connector_amazon_sp_api.tasks.weekly"
 # 	],
 # 	"monthly": [
-# 		"alaiy_os_connector_sp_api.tasks.monthly"
+# 		"alaiy_os_connector_amazon_sp_api.tasks.monthly"
 # 	],
 # }
 
 # Testing
 # -------
 
-# before_tests = "alaiy_os_connector_sp_api.install.before_tests"
+# before_tests = "alaiy_os_connector_amazon_sp_api.install.before_tests"
 
 # Extend DocType Class
 # ------------------------------
 #
 # Specify custom mixins to extend the standard doctype controller.
 # extend_doctype_class = {
-# 	"Task": "alaiy_os_connector_sp_api.custom.task.CustomTaskMixin"
+# 	"Task": "alaiy_os_connector_amazon_sp_api.custom.task.CustomTaskMixin"
 # }
 
 # Overriding Methods
 # ------------------------------
 #
 # override_whitelisted_methods = {
-# 	"frappe.desk.doctype.event.event.get_events": "alaiy_os_connector_sp_api.event.get_events"
+# 	"frappe.desk.doctype.event.event.get_events": "alaiy_os_connector_amazon_sp_api.event.get_events"
 # }
 #
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
 # override_doctype_dashboards = {
-# 	"Task": "alaiy_os_connector_sp_api.task.get_dashboard_data"
+# 	"Task": "alaiy_os_connector_amazon_sp_api.task.get_dashboard_data"
 # }
 
 # exempt linked doctypes from being automatically cancelled
@@ -256,13 +256,13 @@ scheduler_events = {
 
 # Request Events
 # ----------------
-# before_request = ["alaiy_os_connector_sp_api.utils.before_request"]
-# after_request = ["alaiy_os_connector_sp_api.utils.after_request"]
+# before_request = ["alaiy_os_connector_amazon_sp_api.utils.before_request"]
+# after_request = ["alaiy_os_connector_amazon_sp_api.utils.after_request"]
 
 # Job Events
 # ----------
-# before_job = ["alaiy_os_connector_sp_api.utils.before_job"]
-# after_job = ["alaiy_os_connector_sp_api.utils.after_job"]
+# before_job = ["alaiy_os_connector_amazon_sp_api.utils.before_job"]
+# after_job = ["alaiy_os_connector_amazon_sp_api.utils.after_job"]
 
 # User Data Protection
 # --------------------
@@ -292,7 +292,7 @@ scheduler_events = {
 # --------------------------------
 
 # auth_hooks = [
-# 	"alaiy_os_connector_sp_api.auth.validate"
+# 	"alaiy_os_connector_amazon_sp_api.auth.validate"
 # ]
 
 # Automatically update python controller files with type annotations for this app.

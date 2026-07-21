@@ -4,7 +4,7 @@
 
 import frappe
 
-from alaiy_os_connector_sp_api import oauth
+from alaiy_os_connector_amazon_sp_api import oauth
 
 no_cache = 1
 

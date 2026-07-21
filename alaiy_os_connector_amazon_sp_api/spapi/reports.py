@@ -14,8 +14,8 @@ import time
 import frappe
 import requests
 
-from alaiy_os_connector_sp_api.spapi.client import SpApiClient, SpApiError
-from alaiy_os_connector_sp_api.spapi.constants import (
+from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError
+from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	REPORT_POLL_INTERVAL,
 	REPORT_POLL_TIMEOUT,
 )

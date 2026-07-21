@@ -9,7 +9,7 @@ You can install this app using the [bench](https://github.com/frappe/bench) CLI:
 ```bash
 cd $PATH_TO_YOUR_BENCH
 bench get-app $URL_OF_THIS_REPO --branch version-16
-bench install-app alaiy_os_connector_sp_api
+bench install-app alaiy_os_connector_amazon_sp_api
 ```
 
 ### Configuration
@@ -63,14 +63,14 @@ Register the redirect URL in Seller Central → Develop Apps as
 `{app_url}/amazon-oauth/callback`.
 
 The **Amazon Connection** form shows which required keys are still missing and
-only enables **Connect** once all are set (see `alaiy_os_connector_sp_api.app_config`).
+only enables **Connect** once all are set (see `alaiy_os_connector_amazon_sp_api.app_config`).
 
 ### Contributing
 
 This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:
 
 ```bash
-cd apps/alaiy_os_connector_sp_api
+cd apps/alaiy_os_connector_amazon_sp_api
 pre-commit install
 ```
 

@@ -17,9 +17,9 @@ import xml.etree.ElementTree as ET
 import frappe
 from frappe.utils import cint, flt, now_datetime
 
-from alaiy_os_connector_sp_api.spapi import reports
-from alaiy_os_connector_sp_api.spapi.client import SpApiClient, SpApiError
-from alaiy_os_connector_sp_api.spapi.constants import (
+from alaiy_os_connector_amazon_sp_api.spapi import reports
+from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError
+from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	HEALTH_METRICS,
 	HEALTH_METRICS_BY_KEY,
 	HEALTH_STATUS_AT_RISK,
@@ -248,7 +248,7 @@ def run_health_sync(marketplace=None):
 	1. preflight  2. performance + feedback reports  3. finances  4. upsert.
 	Returns a summary dict. Raises SpApiError with an actionable message on 403.
 	"""
-	from alaiy_os_connector_sp_api.spapi.client import describe_forbidden
+	from alaiy_os_connector_amazon_sp_api.spapi.client import describe_forbidden
 
 	connection = frappe.get_cached_doc("Amazon Connection")
 	marketplace = marketplace or connection.primary_marketplace

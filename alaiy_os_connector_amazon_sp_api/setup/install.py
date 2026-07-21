@@ -13,8 +13,8 @@ Two integration points with alaiy_os_core:
 
 import frappe
 
-from alaiy_os_connector_sp_api import install
-from alaiy_os_connector_sp_api.connector_meta import connector_meta
+from alaiy_os_connector_amazon_sp_api import install
+from alaiy_os_connector_amazon_sp_api.connector_meta import connector_meta
 
 # --- main "OS" sidebar injection ---------------------------------------------
 _SIDEBAR_NAME = "OS"

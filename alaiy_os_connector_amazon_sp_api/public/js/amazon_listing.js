@@ -45,7 +45,7 @@ frappe.ui.form.on("Amazon Listing", {
 					__("End this listing on Amazon? The row will be kept as inactive."),
 					() => {
 						frappe.call({
-							method: "alaiy_os_connector_sp_api.api.delete_listing",
+							method: "alaiy_os_connector_amazon_sp_api.api.delete_listing",
 							args: { sku: frm.doc.sku, marketplace: frm.doc.marketplace },
 							freeze: true,
 							freeze_message: __("Ending listing…"),
@@ -66,7 +66,7 @@ function amazon_push_update(frm) {
 		condition: frm.doc.condition,
 	};
 	frappe.call({
-		method: "alaiy_os_connector_sp_api.api.update_listing",
+		method: "alaiy_os_connector_amazon_sp_api.api.update_listing",
 		args: { sku: frm.doc.sku, marketplace: frm.doc.marketplace, changes: JSON.stringify(changes) },
 		freeze: true,
 		freeze_message: __("Pushing update to Amazon…"),
@@ -82,7 +82,7 @@ function amazon_push_update(frm) {
 
 function amazon_sync(frm) {
 	frappe.call({
-		method: "alaiy_os_connector_sp_api.api.sync_listing",
+		method: "alaiy_os_connector_amazon_sp_api.api.sync_listing",
 		args: { sku: frm.doc.sku, marketplace: frm.doc.marketplace },
 		freeze: true,
 		freeze_message: __("Syncing from Amazon…"),
@@ -101,7 +101,7 @@ function amazon_publish(frm) {
 		return;
 	}
 	frappe.call({
-		method: "alaiy_os_connector_sp_api.api.create_listing",
+		method: "alaiy_os_connector_amazon_sp_api.api.create_listing",
 		args: {
 			sku: frm.doc.sku,
 			asin: frm.doc.asin,
@@ -132,7 +132,7 @@ function amazon_catalog_search(frm) {
 		primary_action_label: __("Search"),
 		primary_action(values) {
 			frappe.call({
-				method: "alaiy_os_connector_sp_api.api.search_catalog",
+				method: "alaiy_os_connector_amazon_sp_api.api.search_catalog",
 				args: { query: values.query, marketplace: values.marketplace },
 				freeze: true,
 				callback: (r) => render_catalog_results(frm, d, r.message || []),

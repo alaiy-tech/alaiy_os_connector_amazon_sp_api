@@ -14,8 +14,8 @@ import frappe
 import requests
 from frappe.utils import cint
 
-from alaiy_os_connector_sp_api.spapi import auth
-from alaiy_os_connector_sp_api.spapi.constants import (
+from alaiy_os_connector_amazon_sp_api.spapi import auth
+from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	BACKOFF_BASE,
 	MAX_RETRIES,
 )
@@ -65,7 +65,7 @@ class SpApiClient:
 
 	@property
 	def base_url(self):
-		from alaiy_os_connector_sp_api import app_config as config
+		from alaiy_os_connector_amazon_sp_api import app_config as config
 
 		endpoint = config.resolve_endpoint(self.connection.region)
 		if not endpoint:

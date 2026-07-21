@@ -20,8 +20,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
-from alaiy_os_connector_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
-from alaiy_os_connector_sp_api.spapi.constants import (
+from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
+from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	CATALOG_ITEMS_PATH,
 	DEFAULT_ISSUE_LOCALE,
 	FULFILLMENT_CHANNEL_CODES,

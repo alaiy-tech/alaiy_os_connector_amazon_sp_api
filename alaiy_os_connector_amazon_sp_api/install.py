@@ -7,7 +7,7 @@ Idempotent, so it is safe to run on both after_install and after_migrate.
 
 import frappe
 
-from alaiy_os_connector_sp_api.spapi.constants import DEFAULT_MARKETPLACES
+from alaiy_os_connector_amazon_sp_api.spapi.constants import DEFAULT_MARKETPLACES
 
 APP_ROLES = ("Amazon Manager", "Amazon Viewer")
 

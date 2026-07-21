@@ -16,7 +16,7 @@ Secret values are read here and never returned to the client; use
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api.spapi.constants import (
+from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	REGION_CONSENT_HOSTS,
 	REGION_ENDPOINTS,
 	SANDBOX_ENDPOINTS,

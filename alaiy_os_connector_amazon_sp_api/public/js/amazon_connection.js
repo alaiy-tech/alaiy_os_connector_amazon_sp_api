@@ -24,13 +24,13 @@ frappe.ui.form.on("Amazon Connection", {
 			// Connect requires app credentials in site_config. Check first so the
 			// operator sees exactly what's missing instead of a mid-flow error.
 			frappe.call({
-				method: "alaiy_os_connector_sp_api.api.get_config_status",
+				method: "alaiy_os_connector_amazon_sp_api.api.get_config_status",
 				callback: (r) => {
 					const cfg = r.message || {};
 					if (cfg.ready) {
 						frm.add_custom_button(__("Connect Amazon Account"), () => {
 							frappe.call({
-								method: "alaiy_os_connector_sp_api.api.get_connect_url",
+								method: "alaiy_os_connector_amazon_sp_api.api.get_connect_url",
 								callback: (res) => {
 									if (res.message && res.message.url) {
 										window.location.href = res.message.url;
@@ -59,7 +59,7 @@ frappe.ui.form.on("Amazon Connection", {
 				() => {
 					frappe.confirm(__("Disconnect the Amazon account?"), () => {
 						frappe.call({
-							method: "alaiy_os_connector_sp_api.api.disconnect",
+							method: "alaiy_os_connector_amazon_sp_api.api.disconnect",
 							callback: () => frm.reload_doc(),
 						});
 					});
@@ -71,7 +71,7 @@ frappe.ui.form.on("Amazon Connection", {
 				__("Test Connection"),
 				() => {
 					frappe.call({
-						method: "alaiy_os_connector_sp_api.api.ping",
+						method: "alaiy_os_connector_amazon_sp_api.api.ping",
 						freeze: true,
 						freeze_message: __("Pinging Amazon…"),
 						callback: (r) => {
@@ -90,7 +90,7 @@ frappe.ui.form.on("Amazon Connection", {
 				__("Sync Account Health"),
 				() => {
 					frappe.call({
-						method: "alaiy_os_connector_sp_api.api.sync_health",
+						method: "alaiy_os_connector_amazon_sp_api.api.sync_health",
 						freeze: true,
 						freeze_message: __("Syncing account health…"),
 						callback: (r) => {

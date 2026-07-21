@@ -5,7 +5,7 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import now_datetime
 
-from alaiy_os_connector_sp_api import app_config as config
+from alaiy_os_connector_amazon_sp_api import app_config as config
 
 
 class AmazonConnection(Document):
@@ -32,7 +32,7 @@ class AmazonConnection(Document):
 		"""Mirror our status onto the OS Connector Registry row so the AlaiyOS
 		connector card/panel reflects an OAuth connect (not just a Test click)."""
 		try:
-			from alaiy_os_connector_sp_api.connector_meta import connector_meta
+			from alaiy_os_connector_amazon_sp_api.connector_meta import connector_meta
 
 			connector_id = connector_meta["connector_id"]
 			if not frappe.db.exists("OS Connector Registry", connector_id):
@@ -58,7 +58,7 @@ class AmazonConnection(Document):
 		"""Wipe the stored refresh token and drop any cached access token."""
 		from frappe.utils.password import remove_encrypted_password
 
-		from alaiy_os_connector_sp_api.spapi import auth
+		from alaiy_os_connector_amazon_sp_api.spapi import auth
 
 		token = self.get_password("refresh_token", raise_exception=False)
 		if token:
@@ -75,7 +75,7 @@ class AmazonConnection(Document):
 
 		Updates last_status/last_status_message and returns a summary dict.
 		"""
-		from alaiy_os_connector_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
+		from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 
 		if not self.is_connected():
 			self.set_status("not_configured", "No refresh token stored.")

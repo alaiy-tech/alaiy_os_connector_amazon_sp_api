@@ -5,9 +5,9 @@
 import frappe
 from frappe import _
 
-from alaiy_os_connector_sp_api import oauth
-from alaiy_os_connector_sp_api.spapi import auth
-from alaiy_os_connector_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
+from alaiy_os_connector_amazon_sp_api import oauth
+from alaiy_os_connector_amazon_sp_api.spapi import auth
+from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 
 no_cache = 1
 

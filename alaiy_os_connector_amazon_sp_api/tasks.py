@@ -4,7 +4,7 @@
 
 import frappe
 
-from alaiy_os_connector_sp_api.spapi import health
+from alaiy_os_connector_amazon_sp_api.spapi import health
 
 
 def _connection_ready():

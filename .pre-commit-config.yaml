@@ -8,7 +8,7 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        files: "alaiy_os_connector_sp_api.*"
+        files: "alaiy_os_connector_amazon_sp_api.*"
         exclude: ".*json$|.*txt$|.*csv|.*md|.*svg"
       - id: check-merge-conflict
       - id: check-ast
@@ -38,11 +38,11 @@ repos:
         # Ignore any files that might contain jinja / bundles
         exclude: |
             (?x)^(
-                alaiy_os_connector_sp_api/public/dist/.*|
+                alaiy_os_connector_amazon_sp_api/public/dist/.*|
                 .*node_modules.*|
                 .*boilerplate.*|
-                alaiy_os_connector_sp_api/templates/includes/.*|
-                alaiy_os_connector_sp_api/public/js/lib/.*
+                alaiy_os_connector_amazon_sp_api/templates/includes/.*|
+                alaiy_os_connector_amazon_sp_api/public/js/lib/.*
             )$
 
 
@@ -55,12 +55,12 @@ repos:
         # Ignore any files that might contain jinja / bundles
         exclude: |
             (?x)^(
-                alaiy_os_connector_sp_api/public/dist/.*|
+                alaiy_os_connector_amazon_sp_api/public/dist/.*|
                 cypress/.*|
                 .*node_modules.*|
                 .*boilerplate.*|
-                alaiy_os_connector_sp_api/templates/includes/.*|
-                alaiy_os_connector_sp_api/public/js/lib/.*
+                alaiy_os_connector_amazon_sp_api/templates/includes/.*|
+                alaiy_os_connector_amazon_sp_api/public/js/lib/.*
             )$
 
 ci:
