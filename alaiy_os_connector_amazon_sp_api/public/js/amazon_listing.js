@@ -72,9 +72,14 @@ function amazon_push_update(frm) {
 		freeze: true,
 		freeze_message: __("Pushing update to Amazon…"),
 		callback: (r) => {
+			const status = r.message.listing_status;
+			const ok = status === "active" || status === "pending";
 			frappe.show_alert({
-				message: __("Listing status: {0}", [r.message.listing_status]),
-				indicator: r.message.listing_status === "active" ? "green" : "orange",
+				message:
+					status === "pending"
+						? __("Update submitted to Amazon (processing). Sync from Amazon to confirm.")
+						: __("Listing status: {0}", [status]),
+				indicator: ok ? "green" : "orange",
 			});
 			frm.reload_doc();
 		},

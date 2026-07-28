@@ -252,7 +252,32 @@ def update_listing(sku, changes, marketplace=None):
 
 	issues = _issues_from(resp)
 	_raise_on_error_issues(issues, _("update"))
-	return sync_listing(sku, marketplace=mp.name)
+	# Amazon's Listings API is asynchronous: the submission above is only
+	# *accepted*, not yet applied, so an immediate re-fetch would return the
+	# pre-update state and clobber the operator's edits. Persist the submitted
+	# values locally and mark the row pending; the real state is reconciled by
+	# "Sync from Amazon" or the scheduled job once Amazon has processed it.
+	return _apply_submitted_changes(sku, mp, changes, issues)
+
+
+def _apply_submitted_changes(sku, mp, changes, issues):
+	"""Write the operator's accepted changes to the register row (status pending)."""
+	if not frappe.db.exists("Amazon Listing", sku):
+		# No local row yet (e.g. updating a SKU synced elsewhere) — fall back to a
+		# fetch so the register has something to show.
+		return sync_listing(sku, marketplace=mp.name)
+	row = frappe.get_doc("Amazon Listing", sku)
+	for field in ("title", "price", "quantity", "condition"):
+		if field in changes and changes[field] is not None:
+			row.set(field, changes[field])
+	row.listing_status = "pending"
+	row.last_synced_at = now_datetime()
+	row.set("suppression_reasons", [])
+	for issue in issues:
+		row.append("suppression_reasons", issue)
+	row.flags.ignore_permissions = True
+	row.save(ignore_permissions=True)
+	return {"sku": sku, "listing_status": row.listing_status, "issues": issues}
 
 
 def _build_patches(mp, changes):
