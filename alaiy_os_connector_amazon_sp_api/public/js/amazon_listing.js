@@ -61,6 +61,7 @@ frappe.ui.form.on("Amazon Listing", {
 
 function amazon_push_update(frm) {
 	const changes = {
+		title: frm.doc.title,
 		price: frm.doc.price,
 		quantity: frm.doc.quantity,
 		condition: frm.doc.condition,

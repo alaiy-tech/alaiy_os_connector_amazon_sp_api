@@ -133,18 +133,24 @@ def search_catalog(query, marketplace=None, page_size=10):
 
 
 # --- attribute builders ------------------------------------------------------
-def _offer_attributes(mp, *, condition, asin, price, quantity, fulfillment_channel):
+def _offer_attributes(mp, *, condition, asin, price, quantity, fulfillment_channel, title=None):
 	"""Attributes for an offer-only listing against an existing ASIN."""
 	mp_id = mp.marketplace_id
 	attrs = {
 		"condition_type": [{"marketplace_id": mp_id, "value": condition}],
 		"merchant_suggested_asin": [{"marketplace_id": mp_id, "value": asin}],
 	}
+	if title:
+		attrs["item_name"] = _title_attribute(mp, title)
 	if price is not None:
 		attrs["purchasable_offer"] = _price_attribute(mp, price)
 	if quantity is not None:
 		attrs["fulfillment_availability"] = _availability_attribute(quantity, fulfillment_channel)
 	return attrs
+
+
+def _title_attribute(mp, title):
+	return [{"marketplace_id": mp.marketplace_id, "value": title}]
 
 
 def _price_attribute(mp, price):
@@ -219,16 +225,16 @@ def create_listing(
 
 # --- update ------------------------------------------------------------------
 # fieldname on Amazon Listing -> Listings attribute path (for PATCH)
-_PATCHABLE = {"price", "quantity", "condition"}
+_PATCHABLE = {"price", "quantity", "condition", "title"}
 
 
 def update_listing(sku, changes, marketplace=None):
-	"""Update price / quantity / condition. Tries PATCH, falls back to PUT."""
+	"""Update title / price / quantity / condition. Tries PATCH, falls back to PUT."""
 	conn = _connection()
 	mp = _marketplace(marketplace)
 	changes = {k: v for k, v in (changes or {}).items() if k in _PATCHABLE}
 	if not changes:
-		frappe.throw(_("Nothing to update. Provide price, quantity, and/or condition."))
+		frappe.throw(_("Nothing to update. Provide title, price, quantity, and/or condition."))
 
 	patches = _build_patches(mp, changes)
 	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
@@ -251,6 +257,10 @@ def update_listing(sku, changes, marketplace=None):
 
 def _build_patches(mp, changes):
 	patches = []
+	if "title" in changes:
+		patches.append(
+			{"op": "replace", "path": "/attributes/item_name", "value": _title_attribute(mp, changes["title"])}
+		)
 	if "price" in changes:
 		patches.append(
 			{"op": "replace", "path": "/attributes/purchasable_offer", "value": _price_attribute(mp, changes["price"])}
@@ -286,6 +296,7 @@ def _put_fallback(client, conn, mp, sku, changes):
 			price=changes.get("price", row.price),
 			quantity=changes.get("quantity", row.quantity),
 			fulfillment_channel=row.fulfillment_channel,
+			title=changes.get("title", row.title),
 		),
 	}
 	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
