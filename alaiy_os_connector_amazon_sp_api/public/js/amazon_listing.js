@@ -65,6 +65,12 @@ function amazon_push_update(frm) {
 		price: frm.doc.price,
 		quantity: frm.doc.quantity,
 		condition: frm.doc.condition,
+		description: frm.doc.description,
+		bullet_points: (frm.doc.bullet_points || []).map((r) => r.bullet).filter(Boolean),
+		keywords: (frm.doc.keywords || []).map((r) => r.keyword).filter(Boolean),
+		images: (frm.doc.images || [])
+			.filter((r) => r.image_url)
+			.map((r) => ({ url: r.image_url, is_main: !!r.is_main })),
 	};
 	frappe.call({
 		method: "alaiy_os_connector_amazon_sp_api.api.update_listing",
@@ -170,7 +176,12 @@ function render_catalog_results(frm, dialog, items) {
 		const it = items[$(this).data("i")];
 		frm.set_value("asin", it.asin);
 		if (!frm.doc.title) frm.set_value("title", it.title);
-		if (it.image_url && !frm.doc.image_urls) frm.set_value("image_urls", it.image_url);
+		if (it.image_url && !(frm.doc.images || []).length) {
+			const img = frm.add_child("images");
+			img.image_url = it.image_url;
+			img.is_main = 1;
+			frm.refresh_field("images");
+		}
 		// Product Type isn't a stored field; stash it for Publish Offer.
 		frm.doc.__amazon_product_type = it.product_type;
 		if (dialog.get_value("marketplace")) frm.set_value("marketplace", dialog.get_value("marketplace"));

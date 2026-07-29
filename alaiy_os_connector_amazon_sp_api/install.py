@@ -32,8 +32,11 @@ def _create_roles():
 
 
 def _seed_marketplaces():
-	for marketplace_id, country, code, region, currency, domain in DEFAULT_MARKETPLACES:
+	for marketplace_id, country, code, region, currency, domain, language in DEFAULT_MARKETPLACES:
 		if frappe.db.exists("Amazon Marketplace", marketplace_id):
+			# Backfill the default language on rows seeded before the field existed.
+			if not frappe.db.get_value("Amazon Marketplace", marketplace_id, "language"):
+				frappe.db.set_value("Amazon Marketplace", marketplace_id, "language", language)
 			continue
 		frappe.get_doc(
 			{
@@ -45,5 +48,6 @@ def _seed_marketplaces():
 				# Only link the currency if that Currency record exists on the site.
 				"currency": currency if frappe.db.exists("Currency", currency) else None,
 				"domain": domain,
+				"language": language,
 			}
 		).insert(ignore_permissions=True)

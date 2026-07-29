@@ -21,7 +21,11 @@
   "quantity",
   "column_break_offer",
   "condition",
-  "image_urls",
+  "content_section",
+  "description",
+  "images",
+  "bullet_points",
+  "keywords",
   "issues_section",
   "suppression_reasons",
   "sync_section",
@@ -119,9 +123,36 @@
    "options": "new_new\nnew_open_box\nnew_oem\nused_like_new\nused_very_good\nused_good\nused_acceptable\ncollectible_like_new\ncollectible_very_good\ncollectible_good\ncollectible_acceptable\nrefurbished_refurbished"
   },
   {
-   "fieldname": "image_urls",
-   "fieldtype": "Small Text",
-   "label": "Image URLs"
+   "fieldname": "content_section",
+   "fieldtype": "Section Break",
+   "label": "Content"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text Editor",
+   "label": "Description",
+   "description": "Maps to the Amazon product_description attribute."
+  },
+  {
+   "fieldname": "images",
+   "fieldtype": "Table",
+   "label": "Images",
+   "options": "Amazon Listing Image",
+   "description": "Flag one row as Main; the rest become additional images (up to 8)."
+  },
+  {
+   "fieldname": "bullet_points",
+   "fieldtype": "Table",
+   "label": "Bullet Points",
+   "options": "Amazon Listing Bullet",
+   "description": "Key product features. Amazon allows up to 5 (bullet_point attribute)."
+  },
+  {
+   "fieldname": "keywords",
+   "fieldtype": "Table",
+   "label": "Keywords",
+   "options": "Amazon Listing Keyword",
+   "description": "Search terms (generic_keyword attribute)."
   },
   {
    "fieldname": "issues_section",

@@ -133,7 +133,20 @@ def search_catalog(query, marketplace=None, page_size=10):
 
 
 # --- attribute builders ------------------------------------------------------
-def _offer_attributes(mp, *, condition, asin, price, quantity, fulfillment_channel, title=None):
+def _offer_attributes(
+	mp,
+	*,
+	condition,
+	asin,
+	price,
+	quantity,
+	fulfillment_channel,
+	title=None,
+	description=None,
+	bullets=None,
+	keywords=None,
+	images=None,
+):
 	"""Attributes for an offer-only listing against an existing ASIN."""
 	mp_id = mp.marketplace_id
 	attrs = {
@@ -142,6 +155,14 @@ def _offer_attributes(mp, *, condition, asin, price, quantity, fulfillment_chann
 	}
 	if title:
 		attrs["item_name"] = _title_attribute(mp, title)
+	if description:
+		attrs["product_description"] = _description_attribute(mp, description)
+	if bullets:
+		attrs["bullet_point"] = _bullet_attribute(mp, bullets)
+	if keywords:
+		attrs["generic_keyword"] = _keyword_attribute(mp, keywords)
+	if images:
+		attrs.update(_image_attributes(mp, images))
 	if price is not None:
 		attrs["purchasable_offer"] = _price_attribute(mp, price)
 	if quantity is not None:
@@ -149,8 +170,70 @@ def _offer_attributes(mp, *, condition, asin, price, quantity, fulfillment_chann
 	return attrs
 
 
+def _localized(mp, value):
+	"""A marketplace-scoped text value, tagged with the marketplace language when set."""
+	entry = {"marketplace_id": mp.marketplace_id, "value": value}
+	language = mp.get("language")
+	if language:
+		entry["language_tag"] = language
+	return entry
+
+
 def _title_attribute(mp, title):
-	return [{"marketplace_id": mp.marketplace_id, "value": title}]
+	return [_localized(mp, title)]
+
+
+def _description_attribute(mp, description):
+	return [_localized(mp, description)]
+
+
+def _bullet_attribute(mp, bullets):
+	return [_localized(mp, b) for b in (bullets or []) if b]
+
+
+def _keyword_attribute(mp, keywords):
+	return [_localized(mp, k) for k in (keywords or []) if k]
+
+
+def _normalize_images(images):
+	"""Coerce mixed image input into an ordered [{url, is_main}] list.
+
+	Accepts plain URL strings or {url|image_url, is_main} dicts. The main image is
+	the first row flagged is_main, else the first row.
+	"""
+	norm = []
+	for img in images or []:
+		if isinstance(img, str):
+			url, is_main = img, False
+		else:
+			url = img.get("url") or img.get("image_url")
+			is_main = bool(img.get("is_main"))
+		if url:
+			norm.append({"url": url, "is_main": is_main})
+	if not norm:
+		return []
+	main_idx = next((i for i, im in enumerate(norm) if im["is_main"]), 0)
+	# Reorder so the main image is first and marked; the rest follow in order.
+	main = {"url": norm[main_idx]["url"], "is_main": True}
+	others = [{"url": im["url"], "is_main": False} for i, im in enumerate(norm) if i != main_idx]
+	return [main, *others]
+
+
+def _image_attributes(mp, images):
+	"""{attr_name: [locator]} for the main image + up to 8 additional images."""
+	norm = _normalize_images(images)
+	if not norm:
+		return {}
+	out = {
+		"main_product_image_locator": [
+			{"marketplace_id": mp.marketplace_id, "media_location": norm[0]["url"]}
+		]
+	}
+	for i, im in enumerate(norm[1:9], start=1):
+		out[f"other_product_image_locator_{i}"] = [
+			{"marketplace_id": mp.marketplace_id, "media_location": im["url"]}
+		]
+	return out
 
 
 def _price_attribute(mp, price):
@@ -224,17 +307,34 @@ def create_listing(
 
 
 # --- update ------------------------------------------------------------------
-# fieldname on Amazon Listing -> Listings attribute path (for PATCH)
-_PATCHABLE = {"price", "quantity", "condition", "title"}
+# Amazon Listing fieldnames we allow through to the Listings Items attributes.
+_PATCHABLE = {
+	"title",
+	"price",
+	"quantity",
+	"condition",
+	"description",
+	"bullet_points",
+	"keywords",
+	"images",
+}
+# Product-content attributes (as opposed to offer attributes); their presence
+# means a PUT fallback must not use requirements=LISTING_OFFER_ONLY (which strips them).
+_CONTENT_FIELDS = {"title", "description", "bullet_points", "keywords", "images"}
 
 
 def update_listing(sku, changes, marketplace=None):
-	"""Update title / price / quantity / condition. Tries PATCH, falls back to PUT."""
+	"""Update offer + content attributes. Tries PATCH, falls back to PUT."""
 	conn = _connection()
 	mp = _marketplace(marketplace)
 	changes = {k: v for k, v in (changes or {}).items() if k in _PATCHABLE}
 	if not changes:
-		frappe.throw(_("Nothing to update. Provide title, price, quantity, and/or condition."))
+		frappe.throw(
+			_(
+				"Nothing to update. Provide title, price, quantity, condition, "
+				"description, bullet points, keywords, and/or images."
+			)
+		)
 
 	patches = _build_patches(mp, changes)
 	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
@@ -267,9 +367,21 @@ def _apply_submitted_changes(sku, mp, changes, issues):
 		# fetch so the register has something to show.
 		return sync_listing(sku, marketplace=mp.name)
 	row = frappe.get_doc("Amazon Listing", sku)
-	for field in ("title", "price", "quantity", "condition"):
+	for field in ("title", "price", "quantity", "condition", "description"):
 		if field in changes and changes[field] is not None:
 			row.set(field, changes[field])
+	if "bullet_points" in changes:
+		row.set("bullet_points", [{"bullet": b} for b in (changes["bullet_points"] or []) if b])
+	if "keywords" in changes:
+		row.set("keywords", [{"keyword": k} for k in (changes["keywords"] or []) if k])
+	if "images" in changes:
+		row.set(
+			"images",
+			[
+				{"image_url": im["url"], "is_main": 1 if im["is_main"] else 0}
+				for im in _normalize_images(changes["images"])
+			],
+		)
 	row.listing_status = "pending"
 	row.last_synced_at = now_datetime()
 	row.set("suppression_reasons", [])
@@ -302,6 +414,22 @@ def _build_patches(mp, changes):
 		patches.append(
 			{"op": "replace", "path": "/attributes/condition_type", "value": [{"marketplace_id": mp.marketplace_id, "value": changes["condition"]}]}
 		)
+	if "description" in changes:
+		patches.append(
+			{"op": "replace", "path": "/attributes/product_description", "value": _description_attribute(mp, changes["description"])}
+		)
+	if "bullet_points" in changes:
+		patches.append(
+			{"op": "replace", "path": "/attributes/bullet_point", "value": _bullet_attribute(mp, changes["bullet_points"])}
+		)
+	if "keywords" in changes:
+		patches.append(
+			{"op": "replace", "path": "/attributes/generic_keyword", "value": _keyword_attribute(mp, changes["keywords"])}
+		)
+	if "images" in changes:
+		# Each image locator is its own attribute, so it needs its own patch op.
+		for attr, value in _image_attributes(mp, changes["images"]).items():
+			patches.append({"op": "replace", "path": f"/attributes/{attr}", "value": value})
 	return patches
 
 
@@ -311,24 +439,42 @@ def _put_fallback(client, conn, mp, sku, changes):
 	product_type = _stored_product_type(sku)
 	if not product_type:
 		frappe.throw(_("Cannot fall back to PUT: no product type stored for {0}.").format(sku))
-	body = {
-		"productType": product_type,
-		"requirements": "LISTING_OFFER_ONLY",
-		"attributes": _offer_attributes(
-			mp,
-			condition=changes.get("condition", row.condition),
-			asin=row.asin,
-			price=changes.get("price", row.price),
-			quantity=changes.get("quantity", row.quantity),
-			fulfillment_channel=row.fulfillment_channel,
-			title=changes.get("title", row.title),
-		),
-	}
+
+	touches_content = bool(_CONTENT_FIELDS & set(changes))
+	attributes = _offer_attributes(
+		mp,
+		condition=changes.get("condition", row.condition),
+		asin=row.asin,
+		price=changes.get("price", row.price),
+		quantity=changes.get("quantity", row.quantity),
+		fulfillment_channel=row.fulfillment_channel,
+		title=changes.get("title", row.title),
+		description=changes.get("description", row.description),
+		bullets=changes["bullet_points"] if "bullet_points" in changes else _row_bullets(row),
+		keywords=changes["keywords"] if "keywords" in changes else _row_keywords(row),
+		images=changes["images"] if "images" in changes else _row_images(row),
+	)
+	body = {"productType": product_type, "attributes": attributes}
+	# Offer-only strips product content; only assert it when nothing content-ish changed.
+	if not touches_content:
+		body["requirements"] = "LISTING_OFFER_ONLY"
 	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
 	try:
 		return client.put(_seller_path(conn.selling_partner_id, sku), params=params, body=body, context="listing")
 	except SpApiError as e:
 		_handle_forbidden(e)
+
+
+def _row_bullets(row):
+	return [b.bullet for b in (row.get("bullet_points") or []) if b.bullet]
+
+
+def _row_keywords(row):
+	return [k.keyword for k in (row.get("keywords") or []) if k.keyword]
+
+
+def _row_images(row):
+	return [{"url": im.image_url, "is_main": im.is_main} for im in (row.get("images") or []) if im.image_url]
 
 
 def _stored_product_type(sku):
@@ -429,8 +575,6 @@ def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, pro
 	if fa:
 		quantity = cint(fa[0].get("quantity"))
 
-	image_url = summary.get("mainImage", {}).get("link") if summary.get("mainImage") else None
-
 	values = {
 		"doctype": "Amazon Listing",
 		"sku": sku,
@@ -441,7 +585,6 @@ def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, pro
 		"price": price,
 		"quantity": quantity,
 		"condition": summary.get("conditionType") or "new_new",
-		"image_urls": image_url,
 		"fulfillment_channel": fulfillment_channel or (fa[0].get("fulfillmentChannelCode") if fa else "DEFAULT"),
 		"listing_status": _derive_status(summary, issues),
 		"last_synced_at": now_datetime(),
@@ -464,9 +607,44 @@ def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, pro
 	for issue in issues:
 		row.append("suppression_reasons", issue)
 
+	# Content (description/bullets/keywords/images) only comes back when the
+	# payload includes attributes (single GET). The bulk searchListingsItems path
+	# omits attributes, so we leave any existing/pending content untouched there.
+	_apply_content_from_item(row, mp, item, summary)
+
 	row.flags.ignore_permissions = True
 	row.save(ignore_permissions=True)
 	return {"sku": sku, "listing_status": row.listing_status, "issues": issues}
+
+
+def _apply_content_from_item(row, mp, item, summary):
+	"""Populate description + image/bullet/keyword tables from a Listings payload."""
+	attributes = item.get("attributes") or {}
+	if not attributes:
+		return  # bulk sync (no attributes) — keep whatever content we already have
+
+	def _values(name):
+		return [e.get("value") for e in (attributes.get(name) or []) if e.get("value") is not None]
+
+	description = _values("product_description")
+	row.description = description[0] if description else None
+
+	row.set("bullet_points", [{"bullet": b} for b in _values("bullet_point") if b])
+	row.set("keywords", [{"keyword": k} for k in _values("generic_keyword") if k])
+
+	images = []
+	main_loc = attributes.get("main_product_image_locator") or []
+	main_url = main_loc[0].get("media_location") if main_loc else None
+	if not main_url and summary.get("mainImage"):
+		main_url = summary["mainImage"].get("link")
+	if main_url:
+		images.append({"image_url": main_url, "is_main": 1})
+	for i in range(1, 9):
+		loc = attributes.get(f"other_product_image_locator_{i}") or []
+		url = loc[0].get("media_location") if loc else None
+		if url:
+			images.append({"image_url": url, "is_main": 0})
+	row.set("images", images)
 
 
 # --- bulk sync (searchListingsItems) -----------------------------------------

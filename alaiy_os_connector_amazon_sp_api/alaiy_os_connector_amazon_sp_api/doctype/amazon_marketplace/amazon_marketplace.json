@@ -13,7 +13,8 @@
   "column_break_main",
   "region",
   "currency",
-  "domain"
+  "domain",
+  "language"
  ],
  "fields": [
   {
@@ -61,6 +62,12 @@
    "fieldname": "domain",
    "fieldtype": "Data",
    "label": "Domain"
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Data",
+   "label": "Default Language Tag",
+   "description": "Amazon language_tag for listing text on this marketplace, e.g. en_IN, de_DE. Sent with title/description/bullets/keywords."
   }
  ],
  "index_web_pages_for_search": 0,
