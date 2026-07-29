@@ -12,7 +12,7 @@ import frappe
 from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
-from alaiy_os_connector_amazon_sp_api.spapi import health, listings
+from alaiy_os_connector_amazon_sp_api.spapi import health, listings, reconcile
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
 )
@@ -230,6 +230,28 @@ def sync_all_listings(marketplace=None):
 
 	frappe.enqueue(
 		"alaiy_os_connector_amazon_sp_api.spapi.listings.sync_all_listings",
+		queue="long",
+		timeout=1500,
+		marketplace=marketplace,
+		notify_user=frappe.session.user,
+	)
+	return {"queued": True}
+
+
+@frappe.whitelist()
+def reconcile_listings(marketplace=None):
+	"""Reconcile the full catalog from the Merchant Listings report (no 1000-SKU cap).
+
+	Runs in the background (a full-catalog report can take a while to generate).
+	The caller is notified via the `amazon_reconcile_complete` realtime event.
+	"""
+	_require_manager()
+	conn = frappe.get_cached_doc("Amazon Connection")
+	if not conn.is_connected():
+		frappe.throw(_("Amazon account is not connected."))
+
+	frappe.enqueue(
+		"alaiy_os_connector_amazon_sp_api.spapi.reconcile.reconcile_all_listings",
 		queue="long",
 		timeout=1500,
 		marketplace=marketplace,

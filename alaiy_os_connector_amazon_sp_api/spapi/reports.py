@@ -27,18 +27,18 @@ class ReportCancelled(Exception):
 	"""Report finished as CANCELLED — treated as 'no data', not an error."""
 
 
-def create_report(client, report_type, marketplace_ids, *, data_start=None, data_end=None):
+def create_report(client, report_type, marketplace_ids, *, data_start=None, data_end=None, context="health"):
 	"""Request a report; returns the reportId."""
 	body = {"reportType": report_type, "marketplaceIds": marketplace_ids}
 	if data_start:
 		body["dataStartTime"] = data_start
 	if data_end:
 		body["dataEndTime"] = data_end
-	resp = client.post(f"{REPORTS_BASE}/reports", body=body, context="health")
+	resp = client.post(f"{REPORTS_BASE}/reports", body=body, context=context)
 	return resp.get("reportId")
 
 
-def poll_report(client, report_id):
+def poll_report(client, report_id, *, context="health"):
 	"""Poll until the report leaves the processing states.
 
 	Returns the reportDocumentId on DONE. Raises ReportCancelled on CANCELLED
@@ -46,7 +46,7 @@ def poll_report(client, report_id):
 	"""
 	deadline = time.monotonic() + REPORT_POLL_TIMEOUT
 	while True:
-		resp = client.get(f"{REPORTS_BASE}/reports/{report_id}", context="health")
+		resp = client.get(f"{REPORTS_BASE}/reports/{report_id}", context=context)
 		status = resp.get("processingStatus")
 		if status == "DONE":
 			return resp.get("reportDocumentId")
@@ -65,13 +65,13 @@ def poll_report(client, report_id):
 		time.sleep(REPORT_POLL_INTERVAL)
 
 
-def download_document(client, document_id):
+def download_document(client, document_id, *, context="health"):
 	"""Fetch a report document and return its decoded text.
 
 	The document URL is a pre-signed S3 link (no auth header); content may be
 	GZIP-compressed per `compressionAlgorithm`.
 	"""
-	meta = client.get(f"{REPORTS_BASE}/documents/{document_id}", context="health")
+	meta = client.get(f"{REPORTS_BASE}/documents/{document_id}", context=context)
 	url = meta.get("url")
 	if not url:
 		raise SpApiError("Report document had no download URL", path=f"documents/{document_id}")
@@ -93,18 +93,19 @@ def download_document(client, document_id):
 	return content.decode("utf-8", errors="replace")
 
 
-def fetch_report(report_type, marketplace_ids, *, data_start=None, data_end=None, client=None):
+def fetch_report(report_type, marketplace_ids, *, data_start=None, data_end=None, client=None, context="health"):
 	"""Convenience: run the full request->poll->download and return text.
 
 	Returns None when the report is CANCELLED (no data). Raises on FATAL/timeout.
+	`context` tags the SP-API Log rows (e.g. "health", "reconcile").
 	"""
 	client = client or SpApiClient()
 	report_id = create_report(
-		client, report_type, marketplace_ids, data_start=data_start, data_end=data_end
+		client, report_type, marketplace_ids, data_start=data_start, data_end=data_end, context=context
 	)
 	try:
-		document_id = poll_report(client, report_id)
+		document_id = poll_report(client, report_id, context=context)
 	except ReportCancelled:
 		frappe.logger("amazon_seller").info(f"Report {report_type} cancelled (no data)")
 		return None
-	return download_document(client, document_id)
+	return download_document(client, document_id, context=context)
