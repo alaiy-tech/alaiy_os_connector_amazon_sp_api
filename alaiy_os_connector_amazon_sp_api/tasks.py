@@ -4,7 +4,7 @@
 
 import frappe
 
-from alaiy_os_connector_amazon_sp_api.spapi import health
+from alaiy_os_connector_amazon_sp_api.spapi import health, reconcile
 
 
 def _connection_ready():
@@ -27,11 +27,17 @@ def sync_health():
 
 
 def reconcile_listings():
-	"""Every 6h: rebuild active/inactive/suppressed state. Implemented in Phase 3."""
+	"""Every 6h: reconcile the full catalog's status/price/quantity from the
+	Merchant Listings report (no 1000-SKU cap; see spapi.reconcile)."""
 	if not _connection_ready():
 		return
-	# Phase 3 (listing reconcile) — intentionally not implemented in this build.
-	return
+	try:
+		reconcile.reconcile_all_listings()
+	except Exception:
+		frappe.log_error(
+			title="Amazon scheduled listing reconciliation failed", message=frappe.get_traceback()
+		)
+		_alert_managers("Amazon listing reconciliation failed")
 
 
 def refresh_connection_status():

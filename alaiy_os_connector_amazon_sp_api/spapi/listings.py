@@ -648,8 +648,10 @@ def _apply_content_from_item(row, mp, item, summary):
 
 
 # --- bulk sync (searchListingsItems) -----------------------------------------
-# searchListingsItems returns at most 1000 SKUs per marketplace; a larger
-# catalog needs the Merchant Listings report path (not built yet).
+# searchListingsItems returns at most 1000 SKUs per marketplace but includes
+# rich content (summaries/offers/issues). For catalogs beyond that cap, use
+# spapi.reconcile.reconcile_all_listings, which drives the Merchant Listings
+# report (every SKU, no cap) to reconcile offer/status fields.
 SEARCH_PAGE_SIZE = 20
 SEARCH_MAX_PAGES = 60  # safety cap (1000-SKU limit reached well before this)
 

@@ -39,7 +39,7 @@ frappe.listview_settings["Amazon Listing"] = {
 					if (data.truncated) {
 						frappe.msgprint(
 							__(
-								"Reached the 1,000-listing cap of the Listings API. Some listings may not be synced; a report-based sync is needed for larger catalogs."
+								"Reached the 1,000-listing cap of the Listings API. For larger catalogs use \"Reconcile All from Amazon\", which uses the Merchant Listings report (no cap)."
 							)
 						);
 					}
@@ -48,6 +48,39 @@ frappe.listview_settings["Amazon Listing"] = {
 					frappe.show_alert(
 						{
 							message: __("Amazon sync failed: {0}", [
+								frappe.utils.escape_html((data && data.error) || "unknown error"),
+							]),
+							indicator: "red",
+						},
+						10
+					);
+				}
+			});
+			// Notify + refresh when the background reconciliation finishes.
+			frappe.realtime.on("amazon_reconcile_complete", (data) => {
+				if (data && data.success) {
+					const parts = Object.entries(data.by_status || {})
+						.map(([k, v]) => `${v} ${k}`)
+						.join(", ");
+					const extra = data.skipped_pending
+						? __(" ({0} pending skipped)", [data.skipped_pending])
+						: "";
+					frappe.show_alert(
+						{
+							message: __("Reconciled {0} listings from Amazon{1}{2}", [
+								data.seen,
+								parts ? ` (${parts})` : "",
+								extra,
+							]),
+							indicator: "green",
+						},
+						10
+					);
+					listview.refresh();
+				} else {
+					frappe.show_alert(
+						{
+							message: __("Amazon reconciliation failed: {0}", [
 								frappe.utils.escape_html((data && data.error) || "unknown error"),
 							]),
 							indicator: "red",
@@ -68,6 +101,27 @@ frappe.listview_settings["Amazon Listing"] = {
 						callback: () => {
 							frappe.show_alert({
 								message: __("Sync started — you'll be notified when it completes."),
+								indicator: "blue",
+							});
+						},
+					});
+				}
+			);
+		});
+
+		listview.page.add_inner_button(__("Reconcile All from Amazon"), () => {
+			frappe.confirm(
+				__(
+					"Reconcile the full catalog (status/price/quantity) from the Merchant Listings report? This has no 1,000-listing cap and does not change description, bullet points, keywords, or images."
+				),
+				() => {
+					frappe.call({
+						method: "alaiy_os_connector_amazon_sp_api.api.reconcile_listings",
+						callback: () => {
+							frappe.show_alert({
+								message: __(
+									"Reconciliation started — you'll be notified when it completes."
+								),
 								indicator: "blue",
 							});
 						},
