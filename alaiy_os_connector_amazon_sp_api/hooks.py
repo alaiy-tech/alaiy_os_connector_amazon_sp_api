@@ -32,6 +32,9 @@ doctype_js = {
 }
 doctype_list_js = {"Amazon Listing": "public/js/amazon_listing_list.js"}
 
+# Desk styles (breadcrumb title clamp for the Amazon Listing form)
+app_include_css = "/assets/alaiy_os_connector_amazon_sp_api/css/amazon_desk.css"
+
 # Website routes (clean, hyphenated OAuth URLs -> www page controllers)
 # ---------------------------------------------------------------------
 website_route_rules = [

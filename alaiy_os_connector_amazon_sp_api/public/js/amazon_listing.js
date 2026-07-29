@@ -69,7 +69,6 @@ frappe.ui.form.on("Amazon Listing", {
 // Normalised, comparable view of the fields we can push to Amazon. Child tables
 // are flattened to strings so a simple !== catches adds/edits/removes/reorders.
 function amazon_snapshot(frm) {
-	const flt = frappe.utils.flt;
 	return {
 		title: frm.doc.title || "",
 		price: flt(frm.doc.price),
@@ -82,10 +81,6 @@ function amazon_snapshot(frm) {
 			.map((r) => `${r.is_main ? 1 : 0}:${r.image_url || ""}`)
 			.join("\n"),
 	};
-}
-
-function cint(v) {
-	return frappe.utils.cint ? frappe.utils.cint(v) : parseInt(v || 0, 10) || 0;
 }
 
 function amazon_push_update(frm) {
