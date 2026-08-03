@@ -183,6 +183,14 @@ orders book against that one customer; the buyer stays traceable via
 
 - **Idempotent.** The upsert keys on `amazon_order_id`, so the overlapping poll
   windows and any backfill can re-read the same order safely.
+- **Re-syncing an existing order does not rewrite its lines.** A submitted Sales
+  Order's items are immutable in ERPNext, so a re-sync or backfill refreshes
+  only the header status fields (`amazon_order_status`,
+  `amazon_fulfillment_channel`, `amazon_order_total`,
+  `amazon_last_updated_at`). Draft orders *are* rebuilt in full. This means a
+  provenance field added in a later release stays empty on orders imported
+  before it — `bench migrate` runs a patch that fills those in from data
+  already on the site, without calling Amazon.
 - **The sync position never skips an order.** `Last Orders Sync At` advances to
   the end of the window only if every order in it landed. If Amazon returned an
   order that wasn't imported (an error, or no placeholder to fall back to), the
