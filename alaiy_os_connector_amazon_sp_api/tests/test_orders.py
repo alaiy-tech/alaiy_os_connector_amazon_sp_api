@@ -12,8 +12,7 @@ from unittest.mock import patch
 
 import frappe
 from frappe.tests import UnitTestCase
-from frappe.utils import get_datetime
-from frappe.utils import now_datetime
+from frappe.utils import get_datetime, now_datetime
 
 from alaiy_os_connector_amazon_sp_api.spapi import orders
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
@@ -140,6 +139,42 @@ class TestAmazonOrderMapping(UnitTestCase):
 		self.assertEqual(rows[0]["item_code"], "ITEM-A")
 		self.assertEqual(unmapped, ["SKU-NOPE"])
 
+	# --- ASIN -----------------------------------------------------------
+	def test_asin_is_recorded_on_every_line(self):
+		"""Mapped or not, the ASIN is what identifies what Amazon actually sold."""
+		items = [
+			{
+				"SellerSKU": "SKU-A",
+				"QuantityOrdered": 1,
+				"ItemPrice": {"Amount": "5"},
+				"ASIN": "B0MAPPED01",
+			}
+		]
+		with patch.object(orders, "_resolve_item_code", return_value="ITEM-A"):
+			rows, _ = orders._line_items(items, "WH", "2026-08-10")
+		self.assertEqual(rows[0]["amazon_asin"], "B0MAPPED01")
+
+	def test_asin_survives_on_an_unmapped_line(self):
+		"""On a placeholder line the ASIN is often the only durable handle on
+		the product, since item_code is shared."""
+		items = [
+			{
+				"SellerSKU": "SKU-NOPE",
+				"QuantityOrdered": 1,
+				"ItemPrice": {"Amount": "5"},
+				"ASIN": "B0HCB9C5T3",
+			}
+		]
+		with patch.object(orders, "_resolve_item_code", return_value=None):
+			rows, _ = orders._line_items(items, "WH", "2026-08-10", fallback_item="AMZ-UNMAPPED")
+		self.assertEqual(rows[0]["amazon_asin"], "B0HCB9C5T3")
+
+	def test_missing_asin_is_not_invented(self):
+		items = [{"SellerSKU": "SKU-A", "QuantityOrdered": 1, "ItemPrice": {"Amount": "5"}}]
+		with patch.object(orders, "_resolve_item_code", return_value="ITEM-A"):
+			rows, _ = orders._line_items(items, "WH", "2026-08-10")
+		self.assertIsNone(rows[0]["amazon_asin"])
+
 	# --- duplicate merge ------------------------------------------------
 	def test_duplicate_item_codes_merge_without_changing_the_total(self):
 		"""ERPNext rejects two rows with the same item_code, and Amazon splits
@@ -156,6 +191,78 @@ class TestAmazonOrderMapping(UnitTestCase):
 		# 2*10 + 3*5 = 35, over 5 units = 7.0
 		self.assertEqual(merged[0]["rate"], 7.0)
 		self.assertEqual(merged[1]["item_code"], "ITEM-B")
+
+	def test_merging_the_same_product_keeps_its_asin(self):
+		"""Two part-shipments of one SKU share an ASIN — that's still true of
+		the merged row."""
+		merged = orders._merge_duplicate_rows(
+			[
+				{
+					"item_code": "ITEM-A",
+					"qty": 1,
+					"rate": 10.0,
+					"amazon_asin": "B0SAME",
+					"amazon_seller_sku": "SKU-A",
+				},
+				{
+					"item_code": "ITEM-A",
+					"qty": 2,
+					"rate": 10.0,
+					"amazon_asin": "B0SAME",
+					"amazon_seller_sku": "SKU-A",
+				},
+			]
+		)
+		self.assertEqual(len(merged), 1)
+		self.assertEqual(merged[0]["amazon_asin"], "B0SAME")
+		self.assertEqual(merged[0]["amazon_seller_sku"], "SKU-A")
+
+	def test_merging_different_products_drops_the_conflicting_asin(self):
+		"""Every unmapped line shares the placeholder item_code, so a merge can
+		span different products. Labelling the merged row with the first ASIN
+		would assert something false, so conflicting ids are dropped and the
+		descriptions concatenated instead."""
+		merged = orders._merge_duplicate_rows(
+			[
+				{
+					"item_code": "AMZ-UNMAPPED",
+					"qty": 1,
+					"rate": 10.0,
+					"amazon_asin": "B0AAA",
+					"amazon_seller_sku": "SKU-1",
+					"item_name": "Seat Cover",
+					"description": "Seat Cover | SKU: SKU-1",
+				},
+				{
+					"item_code": "AMZ-UNMAPPED",
+					"qty": 1,
+					"rate": 20.0,
+					"amazon_asin": "B0BBB",
+					"amazon_seller_sku": "SKU-2",
+					"item_name": "Phone Mount",
+					"description": "Phone Mount | SKU: SKU-2",
+				},
+			]
+		)
+		self.assertEqual(len(merged), 1)
+		self.assertIsNone(merged[0]["amazon_asin"])
+		self.assertIsNone(merged[0]["amazon_seller_sku"])
+		# ...but nothing is lost: both products remain legible on the row
+		self.assertIn("SKU-1", merged[0]["description"])
+		self.assertIn("SKU-2", merged[0]["description"])
+		# and the order total is still exact: 10 + 20 over 2 units
+		self.assertEqual(merged[0]["qty"], 2)
+		self.assertEqual(merged[0]["rate"], 15.0)
+
+	def test_merged_item_name_stays_within_the_data_column(self):
+		"""item_name is Data(140); an overflowing concatenation fails the insert."""
+		merged = orders._merge_duplicate_rows(
+			[
+				{"item_code": "AMZ-UNMAPPED", "qty": 1, "rate": 1.0, "item_name": "A" * 130},
+				{"item_code": "AMZ-UNMAPPED", "qty": 1, "rate": 1.0, "item_name": "B" * 130},
+			]
+		)
+		self.assertLessEqual(len(merged[0]["item_name"]), 140)
 
 	# --- sync window ----------------------------------------------------
 	def test_first_run_reaches_back_one_day(self):

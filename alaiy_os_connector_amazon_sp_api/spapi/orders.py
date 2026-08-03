@@ -274,6 +274,7 @@ def _line_items(order_items, warehouse, delivery_date, fallback_item=None):
 			continue
 		gross = flt(_money(item.get("ItemPrice")))
 		discount = flt(_money(item.get("PromotionDiscount")))
+		asin = item.get("ASIN")
 		row = {
 			"qty": qty,
 			"rate": (gross - discount) / qty if qty else 0,
@@ -281,19 +282,22 @@ def _line_items(order_items, warehouse, delivery_date, fallback_item=None):
 			"delivery_date": delivery_date,
 			"amazon_order_item_id": item.get("OrderItemId"),
 			"amazon_seller_sku": sku,
+			# Recorded on every line, mapped or not. On an unmapped line it is
+			# often the only durable handle on what was actually sold, since the
+			# item_code is a shared placeholder.
+			"amazon_asin": asin,
 		}
 
 		item_code = _resolve_item_code(sku)
 		if item_code:
 			row["item_code"] = item_code
 		else:
-			unmapped.append(sku or item.get("ASIN") or "?")
+			unmapped.append(sku or asin or "?")
 			if not fallback_item:
 				continue
 			# Without Amazon's own title on the row, every placeholder line on
 			# the order renders identically and the SKU is invisible on print.
 			title = (item.get("Title") or "").strip()
-			asin = item.get("ASIN")
 			row["item_code"] = fallback_item
 			row["item_name"] = (title or f"Amazon SKU {sku}")[:140]
 			row["description"] = " | ".join(
@@ -320,6 +324,14 @@ def _merge_duplicate_rows(rows):
 	fulfilment, split shipments), so this is the normal case, not an edge one.
 	Qty is summed and the rate recomputed from the combined amount so the order
 	total is unchanged.
+
+	Per-line identifiers need care here. Merging two lines of the *same* SKU
+	keeps their shared ASIN, which is correct. But every unmapped line shares
+	the placeholder item_code, so a merge can span genuinely different products
+	— and carrying the first row's ASIN forward would label the merged row with
+	a product it only partly represents. Identifiers that disagree are dropped
+	rather than guessed, and the descriptions are concatenated so what was
+	actually sold is still legible on the row.
 	"""
 	merged = {}
 	order = []
@@ -333,8 +345,15 @@ def _merge_duplicate_rows(rows):
 		total = flt(existing["qty"]) * flt(existing["rate"]) + flt(row["qty"]) * flt(row["rate"])
 		existing["qty"] = flt(existing["qty"]) + flt(row["qty"])
 		existing["rate"] = (total / existing["qty"]) if existing["qty"] else 0
-		# Only the first row's Amazon ids survive the merge; the full set is
-		# always recoverable from Amazon via amazon_order_id.
+		for field in ("amazon_asin", "amazon_seller_sku", "amazon_order_item_id"):
+			if existing.get(field) != row.get(field):
+				existing[field] = None
+		for field in ("item_name", "description"):
+			incoming = row.get(field)
+			if incoming and incoming not in (existing.get(field) or ""):
+				joined = f"{existing.get(field) or ''}; {incoming}".strip("; ")
+				# item_name is a Data column; overflowing it fails the insert.
+				existing[field] = joined[:140] if field == "item_name" else joined
 	return [merged[key] for key in order]
 
 
