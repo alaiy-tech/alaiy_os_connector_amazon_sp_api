@@ -50,6 +50,21 @@ def _ensure_order_custom_fields():
 	custom_fields = {
 		"Sales Order": [
 			{
+				# Generic on purpose — this answers "which channel did this order
+				# come from" for any connector, so it sits in the main section
+				# (visible without expanding anything) rather than inside the
+				# Amazon block, and another connector writes its own name here
+				# instead of adding a competing field.
+				"fieldname": "sales_channel",
+				"label": "Sales Channel",
+				"fieldtype": "Data",
+				"read_only": 1,
+				"in_list_view": 1,
+				"in_standard_filter": 1,
+				"insert_after": "order_type",
+				"description": "Channel this order originated from. Set by the connector that imported it; blank for orders raised directly in AlaiyOS.",
+			},
+			{
 				"fieldname": "amazon_section",
 				"label": "Amazon",
 				"fieldtype": "Section Break",

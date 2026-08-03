@@ -49,6 +49,12 @@ FULFILLMENT_CHANNEL_CODES = {
 # --- Orders API (v0) --------------------------------------------------------
 ORDERS_PATH = "/orders/v0/orders"
 
+# Value written to Sales Order.sales_channel. That field is deliberately
+# generic (not `amazon_*`): it answers "which channel did this order come
+# from" for every connector, so a sibling connector populates the same field
+# with its own name rather than adding a competing one.
+SALES_CHANNEL = "Amazon"
+
 # Orders API page size (1-100). Amazon returns fewer than this freely, so the
 # loop must key off NextToken, not a short page.
 ORDERS_PAGE_SIZE = 100

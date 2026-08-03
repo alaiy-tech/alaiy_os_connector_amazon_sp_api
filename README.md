@@ -68,6 +68,12 @@ ERPNext **Sales Orders** carrying `amazon_order_id`, `amazon_order_status`,
 `amazon_last_updated_at` (custom fields installed by `install.py`, plus
 `amazon_order_item_id` / `amazon_seller_sku` on Sales Order Item).
 
+`install.py` also adds **`sales_channel`** to Sales Order — a deliberately
+*generic* field (this connector writes `Amazon`) so every channel connector
+reports origin through one field instead of adding a competing one. It sits in
+the main section next to Order Type, shows as a list column, and is available
+as a standard filter. Orders raised directly in AlaiyOS leave it blank.
+
 ## Requirements
 
 - A [Frappe Bench](https://github.com/frappe/bench) v16 environment

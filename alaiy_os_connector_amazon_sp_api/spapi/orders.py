@@ -44,6 +44,7 @@ from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	ORDERS_PATH,
 	ORDERS_RECENT_BLIND_SPOT,
 	ORDERS_SYNC_OVERLAP,
+	SALES_CHANNEL,
 )
 from alaiy_os_connector_amazon_sp_api.spapi.listings import _marketplace
 
@@ -483,6 +484,7 @@ def _build_sales_order(order, mp, config, amazon_order_id, rows):
 	so.selling_price_list = config["price_list"]
 	so.set_warehouse = config["warehouse"]
 	so.po_no = amazon_order_id
+	so.sales_channel = SALES_CHANNEL
 	so.amazon_order_id = amazon_order_id
 	so.amazon_marketplace = mp.name
 	so.amazon_order_status = order.get("OrderStatus")
@@ -564,6 +566,7 @@ def _refresh_draft(so_name, order, status, amazon_order_id, client, config):
 		so.append("items", row)
 	so.set("taxes", [])
 	_append_tax(so, order_items, config["company"])
+	so.sales_channel = SALES_CHANNEL
 	so.amazon_order_status = order.get("OrderStatus")
 	so.amazon_fulfillment_channel = order.get("FulfillmentChannel")
 	so.amazon_order_total = _money(order.get("OrderTotal"))
