@@ -25,6 +25,10 @@ after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 alaiy_os_sidebar_connector_items = [
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
 	 "link_to": "Amazon Listing", "label": "Listings", "icon": "list"},
+	# Orders are plain Sales Orders — there's no Amazon-specific DocType to
+	# point at. The `amazon_order_id` standard filter narrows the list to ours.
+	{"connector_id": "amazon_sp_api", "link_type": "DocType",
+	 "link_to": "Sales Order", "label": "Orders", "icon": "shopping-cart"},
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
 	 "link_to": "Account Health Metric", "label": "Account Health", "icon": "heart-pulse"},
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
@@ -46,7 +50,12 @@ doctype_js = {
 	"Amazon Connection": "public/js/amazon_connection.js",
 	"Amazon Listing": "public/js/amazon_listing.js",
 }
-doctype_list_js = {"Amazon Listing": "public/js/amazon_listing_list.js"}
+doctype_list_js = {
+	"Amazon Listing": "public/js/amazon_listing_list.js",
+	# Orders land as plain Sales Orders, so the sync controls belong on that
+	# list rather than on a DocType of our own.
+	"Sales Order": "public/js/amazon_sales_order_list.js",
+}
 
 # Desk styles (breadcrumb title clamp for the Amazon Listing form)
 app_include_css = "/assets/alaiy_os_connector_amazon_sp_api/css/amazon_desk.css"
@@ -71,6 +80,12 @@ scheduler_events = {
 		# Every 6 hours: rebuild listing state (Phase 3).
 		"0 */6 * * *": [
 			"alaiy_os_connector_amazon_sp_api.tasks.reconcile_listings",
+		],
+		# Every 30 minutes: pull orders updated since the watermark. Cheap when
+		# idle (one getOrders call returning nothing), so the cadence is set by
+		# how stale an order may be, not by API cost.
+		"*/30 * * * *": [
+			"alaiy_os_connector_amazon_sp_api.tasks.sync_orders",
 		],
 	},
 }

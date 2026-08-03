@@ -4,6 +4,7 @@
 
 Phase 1: connection status, connect URL, disconnect, ping, health sync/summary.
 Phase 2: catalog search + listing create/update/delete/sync.
+Phase 4: Seller Central order sync into Sales Orders.
 """
 
 import json
@@ -258,3 +259,72 @@ def reconcile_listings(marketplace=None):
 		notify_user=frappe.session.user,
 	)
 	return {"queued": True}
+
+
+# --- orders (Phase 4) --------------------------------------------------------
+def _assert_orders_configured():
+	conn = frappe.get_cached_doc("Amazon Connection")
+	if not conn.is_connected():
+		frappe.throw(_("Amazon account is not connected."))
+	if not conn.orders_customer:
+		frappe.throw(
+			_("Set a Default Customer under Orders on the Amazon Connection before syncing orders.")
+		)
+	return conn
+
+
+@frappe.whitelist()
+def sync_orders(marketplace=None):
+	"""Pull orders updated since the watermark into Sales Orders.
+
+	Runs in the background: a busy window is hundreds of orders, each needing
+	its own getOrderItems call at 0.5 rps. The caller is notified via the
+	`amazon_orders_sync_complete` realtime event.
+	"""
+	_require_manager()
+	_assert_orders_configured()
+
+	frappe.enqueue(
+		"alaiy_os_connector_amazon_sp_api.spapi.orders.sync_orders",
+		queue="long",
+		timeout=3600,
+		marketplace=marketplace,
+		notify_user=frappe.session.user,
+	)
+	return {"queued": True}
+
+
+@frappe.whitelist()
+def backfill_orders(date_from, date_to=None, marketplace=None):
+	"""Re-read an explicit date range without disturbing the scheduled watermark.
+
+	Chunked internally, and idempotent on the Amazon order id — re-running an
+	overlapping range creates nothing new.
+	"""
+	_require_manager()
+	_assert_orders_configured()
+
+	frappe.enqueue(
+		"alaiy_os_connector_amazon_sp_api.spapi.orders.backfill_orders",
+		queue="long",
+		timeout=7200,
+		marketplace=marketplace,
+		date_from=date_from,
+		date_to=date_to,
+		notify_user=frappe.session.user,
+	)
+	return {"queued": True}
+
+
+@frappe.whitelist()
+def get_orders_sync_status():
+	"""Watermark + counts for the connector panel's sync-status slot."""
+	conn = frappe.get_cached_doc("Amazon Connection")
+	synced = 0
+	if frappe.db.exists("DocType", "Sales Order"):
+		synced = frappe.db.count("Sales Order", {"amazon_order_id": ["is", "set"]})
+	return {
+		"configured": bool(conn.orders_customer),
+		"last_sync_at": conn.last_orders_sync_at,
+		"synced_orders": synced,
+	}

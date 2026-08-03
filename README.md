@@ -34,6 +34,7 @@ operations. No SP-API calls are ever made from the browser.
 - **Login with Amazon OAuth** — sellers authorize via Amazon's consent screen; the app never handles a long-lived seller secret.
 - **Account health monitoring** — syncs health metrics and recent seller feedback per marketplace, with an overall status roll-up.
 - **Listing management** — catalog search (ASIN + product type), create/update/delete offers, and per-SKU or full-catalog sync.
+- **Order sync** — polls Seller Central and materialises orders directly as **Sales Orders**, idempotent on the Amazon order id, with a manual date-range backfill.
 - **Multi-region support** — `NA` / `EU` / `FE` region groups, with sandbox and custom-endpoint overrides.
 - **Auditable** — every SP-API call is captured in the **SP-API Log** DocType.
 - **Scheduled sync** — daily health sync, hourly connection preflight, and a periodic listing reconcile hook.
@@ -45,8 +46,8 @@ operations. No SP-API calls are ever made from the browser.
 | `api.py` | Whitelisted entry points for Desk/JS (all access is server-side and role-guarded). |
 | `oauth.py`, `www/amazon_oauth_*` | Login with Amazon consent + callback flow. |
 | `app_config.py` | Resolves credentials, region, endpoint, and consent host from `site_config.json`. |
-| `spapi/` | SP-API client: `auth`, `client`, `listings`, `health`, `reports`, `constants`. |
-| `tasks.py` | Scheduled jobs (health sync, connection refresh, listing reconcile). |
+| `spapi/` | SP-API client: `auth`, `client`, `listings`, `orders`, `health`, `reports`, `constants`. |
+| `tasks.py` | Scheduled jobs (health sync, connection refresh, listing reconcile, order sync). |
 | `connector_meta.py` | Registration metadata for the AlaiyOS OS Connector Registry. |
 
 ### DocTypes
@@ -60,6 +61,12 @@ operations. No SP-API calls are ever made from the browser.
 | **Account Health Metric** | Synced account-health metrics per marketplace. |
 | **Seller Feedback** | Recent seller feedback pulled from Amazon. |
 | **SP-API Log** | Audit log of every SP-API request/response. |
+
+Orders deliberately have **no DocType of their own** — they are created as
+ERPNext **Sales Orders** carrying `amazon_order_id`, `amazon_order_status`,
+`amazon_marketplace`, `amazon_fulfillment_channel`, `amazon_order_total`, and
+`amazon_last_updated_at` (custom fields installed by `install.py`, plus
+`amazon_order_item_id` / `amazon_seller_sku` on Sales Order Item).
 
 ## Requirements
 
@@ -153,9 +160,37 @@ All operations run server-side through whitelisted methods in
 | `search_catalog` | Search the Amazon catalog for an ASIN + product type. |
 | `create_listing` / `update_listing` / `delete_listing` | Manage offers for a SKU. |
 | `sync_listing` / `sync_all_listings` | Refresh one listing, or the whole catalog (background job). |
+| `sync_orders` / `backfill_orders` | Pull orders into Sales Orders (background job). |
+| `get_orders_sync_status` | Watermark + count of orders synced so far. |
 
 `sync_all_listings` runs in the background (a catalog can be up to 1,000 SKUs)
 and emits the `amazon_sync_all_complete` realtime event to the caller when done.
+
+### Order sync
+
+Set **Default Customer** (and optionally Company, Warehouse, Price List) under
+**Orders** on the Amazon Connection first — the scheduled job stays dormant
+until a customer is set. Buyer info is a restricted SP-API endpoint, so all
+orders book against that one customer; the buyer stays traceable via
+`amazon_order_id`.
+
+- **Idempotent.** The upsert keys on `amazon_order_id`, so the overlapping poll
+  windows and any backfill can re-read the same order safely.
+- **Amazon's status drives the docstatus.** `Pending` lands as a draft (Amazon
+  withholds pricing while an order is Pending), shipped/unshipped statuses are
+  submitted, and a cancellation cancels the Sales Order — unless a Delivery Note
+  or Sales Invoice already exists against it, in which case the conflict is
+  logged and the documents are left alone.
+- **Unmapped SKUs park the whole order.** No Item is ever auto-created. Link the
+  SKU via the **Product** field on its Amazon Listing and re-run; the skipped
+  SKUs are named in the Error Log.
+- **Scope is the order header plus line items.** Shipping charges, Amazon fees,
+  and settlements are not mapped yet, so `amazon_order_total` (Amazon's own
+  figure) can legitimately differ from the Sales Order grand total — the field
+  is there to make that gap visible rather than hide it.
+
+Both entry points run in the background and emit `amazon_orders_sync_complete`.
+Buttons live under **Amazon** on the Sales Order list view.
 
 ## Scheduled Tasks
 
@@ -166,7 +201,8 @@ cleanly when the connection is not configured.
 | --- | --- | --- |
 | Daily | `sync_health` | Refresh account-health metrics + feedback for the primary marketplace. |
 | Hourly | `refresh_connection_status` | Ping preflight and update `last_status`. |
-| Every 6h | `reconcile_listings` | Rebuild active/inactive/suppressed listing state *(Phase 3 — not yet implemented)*. |
+| Every 6h | `reconcile_listings` | Reconcile the full catalog's status/price/quantity from the Merchant Listings report. |
+| Every 30m | `sync_orders` | Pull orders updated since the watermark into Sales Orders. Dormant until a Default Customer is set. |
 
 On a scheduled failure, users with the **Amazon Manager** role receive a
 best-effort email alert.

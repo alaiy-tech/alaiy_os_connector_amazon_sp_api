@@ -46,6 +46,50 @@ FULFILLMENT_CHANNEL_CODES = {
 	"AMAZON": "AMAZON_NA",
 }
 
+# --- Orders API (v0) --------------------------------------------------------
+ORDERS_PATH = "/orders/v0/orders"
+
+# Orders API page size (1-100). Amazon returns fewer than this freely, so the
+# loop must key off NextToken, not a short page.
+ORDERS_PAGE_SIZE = 100
+ORDERS_MAX_PAGES = 200  # safety cap: 20k orders in one run
+
+# Amazon does not reliably return orders updated in the last ~2 minutes, so
+# every window stops short of "now" and the watermark advances only to that
+# capped end — otherwise orders landing in the blind spot are skipped forever.
+ORDERS_RECENT_BLIND_SPOT = 120  # seconds
+
+# Re-read this far behind the watermark on each run. LastUpdatedAfter is
+# inclusive-ish and clock skew is real; re-reading is free because the upsert
+# is idempotent on AmazonOrderId.
+ORDERS_SYNC_OVERLAP = 300  # seconds
+
+# How far back the first-ever sync reaches when `orders_sync_from` is unset.
+ORDERS_DEFAULT_LOOKBACK_DAYS = 7
+
+# A backfill is walked in chunks: Amazon degrades badly on very wide
+# LastUpdatedAfter/Before windows for high-volume sellers.
+ORDERS_BACKFILL_CHUNK_DAYS = 7
+
+# getOrderItems is rate-limited at 0.5 rps (burst 30) — far tighter than
+# getOrders. One item call per order will exhaust the burst on any real
+# catalog, so pace them rather than relying on 429-retry alone.
+ORDER_ITEMS_MIN_INTERVAL = 2.0  # seconds between getOrderItems calls
+
+# Amazon OrderStatus -> what the Sales Order should be.
+# Pending is deliberately draft: Amazon withholds buyer-visible pricing while
+# an order is Pending, so ItemPrice is routinely absent and any total we
+# computed now would be wrong.
+ORDER_STATUS_DRAFT = ("Pending",)
+ORDER_STATUS_SUBMIT = (
+	"Unshipped",
+	"PartiallyShipped",
+	"Shipped",
+	"InvoiceUnconfirmed",
+	"PendingAvailability",
+)
+ORDER_STATUS_CANCEL = ("Canceled", "Unfulfillable")
+
 # --- Report types (Reports API 2021-06-30) ----------------------------------
 REPORT_SELLER_PERFORMANCE = "GET_V2_SELLER_PERFORMANCE_REPORT"
 REPORT_SELLER_FEEDBACK = "GET_SELLER_FEEDBACK_DATA"
