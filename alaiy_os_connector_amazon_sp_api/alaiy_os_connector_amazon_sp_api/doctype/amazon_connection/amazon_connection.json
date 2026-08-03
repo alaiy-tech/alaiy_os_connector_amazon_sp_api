@@ -153,7 +153,7 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "How far back the first sync reaches. Leave blank to start from 7 days ago.",
+   "description": "How far back the first sync reaches. Leave blank to start from 1 day ago. Only used until the watermark below is set — to re-read an older range afterwards, use Backfill Orders on the Sales Order list.",
    "fieldname": "orders_sync_from",
    "fieldtype": "Datetime",
    "label": "Sync Orders From"
