@@ -12,12 +12,24 @@ after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 
 # AlaiyOS integration
 # -------------------
-# Re-inject the Amazon sidebar section whenever the core rebuilds the OS sidebar.
-doc_events = {
-	"Workspace Sidebar": {
-		"on_update": "alaiy_os_connector_amazon_sp_api.setup.install._on_sidebar_update",
-	}
-}
+# Child links under this connector's own section in the main OS sidebar.
+# The core builds the section itself (labelled from the OS Connector
+# Registry row, with an automatic Dashboard link) and threads it in before the
+# trailing Settings item — so ordering is the core's job, not ours.
+alaiy_os_sidebar_connector_items = [
+	{"connector_id": "amazon_sp_api", "link_type": "DocType",
+	 "link_to": "Amazon Connection", "label": "Connection", "icon": "plug"},
+	{"connector_id": "amazon_sp_api", "link_type": "DocType",
+	 "link_to": "Amazon Listing", "label": "Listings", "icon": "list"},
+	{"connector_id": "amazon_sp_api", "link_type": "DocType",
+	 "link_to": "Account Health Metric", "label": "Account Health", "icon": "heart-pulse"},
+	{"connector_id": "amazon_sp_api", "link_type": "DocType",
+	 "link_to": "Seller Feedback", "label": "Seller Feedback", "icon": "star"},
+	{"connector_id": "amazon_sp_api", "link_type": "DocType",
+	 "link_to": "Amazon Marketplace", "label": "Marketplaces", "icon": "globe"},
+	{"connector_id": "amazon_sp_api", "link_type": "DocType",
+	 "link_to": "SP-API Log", "label": "SP-API Logs", "icon": "activity"},
+]
 
 # Log links surfaced in the OS Settings sidebar 'Logs' section by alaiy_os_core.
 alaiy_os_sidebar_log_items = [
