@@ -713,6 +713,39 @@ def _build_config(conn, mp):
 	}
 
 
+# Outcomes that mean "Amazon gave us this order and no Sales Order exists for
+# it". The watermark must never advance past one of these — that is precisely
+# how an order gets seen once and then skipped forever.
+NON_PERSISTING_OUTCOMES = ("skipped_unresolved", "conflict")
+
+
+def _earlier(current, candidate):
+	"""Running minimum that tolerates either side being None."""
+	if candidate is None:
+		return current
+	if current is None:
+		return candidate
+	return min(current, candidate)
+
+
+def _capped_watermark(end, retry_from):
+	"""Where the watermark may advance to, given orders that didn't land.
+
+	Held one second before the oldest un-imported order so the next run's
+	LastUpdatedAfter definitely re-includes it — the API filter is inclusive at
+	second granularity, and landing exactly on the boundary is not worth
+	gambling an order on.
+
+	This can pin the watermark indefinitely if an order fails permanently. That
+	is deliberate: a stuck watermark is visible in the summary and on the
+	connection, whereas silently stepping over the order is not. The run
+	reports `watermark_held_at` and the offending ids so it can be resolved.
+	"""
+	if retry_from is None:
+		return end
+	return min(end, retry_from - timedelta(seconds=1))
+
+
 def _resolve_window(conn, updated_after, updated_before):
 	"""Work out the LastUpdatedAfter/Before window for a scheduled run."""
 	end = get_datetime(updated_before) if updated_before else _window_end()
@@ -730,9 +763,13 @@ def _resolve_window(conn, updated_after, updated_before):
 def sync_orders(marketplace=None, updated_after=None, updated_before=None, notify_user=None):
 	"""Pull every order updated in the window and upsert it as a Sales Order.
 
-	Intended to run as a background/scheduled job. The watermark advances only
-	on a clean full walk — a mid-run failure re-reads the window next time
-	rather than skipping the orders it never got to.
+	Intended to run as a background/scheduled job.
+
+	The watermark never moves past an order that didn't land. A whole-run
+	failure re-reads the window next time, and — just as importantly — a single
+	order that was *seen and refused* holds the watermark at its own
+	LastUpdateDate, so the next run picks it up again instead of stepping over
+	it forever. Orders ahead of that point are still not re-read.
 	"""
 	conn = _connection()
 	mp = _marketplace(marketplace)
@@ -749,6 +786,10 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 	seen = 0
 	truncated = False
 	config = None
+	# Oldest LastUpdateDate among orders that were seen but did NOT persist.
+	# The watermark is not allowed past this, or those orders are lost.
+	retry_from = None
+	failed_ids = []
 
 	try:
 		config = _build_config(conn, mp)
@@ -764,14 +805,19 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 			for order in orders:
 				seen += 1
 				try:
-					counts[upsert_order(order, mp, client, config)] += 1
+					outcome = upsert_order(order, mp, client, config)
+					counts[outcome] += 1
 				except Exception:
+					outcome = "conflict"
 					counts["conflict"] += 1
 					frappe.db.rollback()
 					frappe.log_error(
 						title=f"Amazon order {order.get('AmazonOrderId')} failed to import",
 						message=frappe.get_traceback(),
 					)
+				if outcome in NON_PERSISTING_OUTCOMES:
+					retry_from = _earlier(retry_from, _from_amazon_iso(order.get("LastUpdateDate")))
+					failed_ids.append(order.get("AmazonOrderId"))
 			frappe.db.commit()  # persist each page as we go
 			if not next_token:
 				break
@@ -779,9 +825,14 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 				truncated = True
 
 		if not truncated and not updated_after:
-			# Only a complete, unbounded-by-cap walk earns a watermark advance.
-			conn.db_set("last_orders_sync_at", end, update_modified=False)
+			# Only a complete, unbounded-by-cap walk earns a watermark advance —
+			# and only up to the oldest order that didn't land.
+			watermark = _capped_watermark(end, retry_from)
+			conn.db_set("last_orders_sync_at", watermark, update_modified=False)
 			frappe.db.commit()
+			if watermark != end:
+				summary["watermark_held_at"] = str(watermark)
+				summary["retry_orders"] = [i for i in failed_ids if i][:20]
 
 		summary.update({"success": True, "seen": seen, "truncated": truncated, **counts})
 	except Exception as e:

@@ -182,6 +182,14 @@ orders book against that one customer; the buyer stays traceable via
 
 - **Idempotent.** The upsert keys on `amazon_order_id`, so the overlapping poll
   windows and any backfill can re-read the same order safely.
+- **The sync position never skips an order.** `Last Orders Sync At` advances to
+  the end of the window only if every order in it landed. If Amazon returned an
+  order that wasn't imported (an error, or no placeholder to fall back to), the
+  position is held one second *behind* that order so the next run picks it up
+  again. The run reports `watermark_held_at` and the order ids. A permanently
+  failing order therefore pins the position and each run re-reads from it —
+  deliberately, because a stuck-and-visible sync beats one that silently steps
+  over orders. Fix the cause, or move **Last Orders Sync At** on by hand.
 - **Amazon's status drives the docstatus.** `Pending` lands as a draft (Amazon
   withholds pricing while an order is Pending), shipped/unshipped statuses are
   submitted, and a cancellation cancels the Sales Order — unless a Delivery Note

@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import frappe
 from frappe.tests import UnitTestCase
+from frappe.utils import get_datetime
 from frappe.utils import now_datetime
 
 from alaiy_os_connector_amazon_sp_api.spapi import orders
@@ -191,3 +192,43 @@ class TestAmazonOrderMapping(UnitTestCase):
 		self.assertEqual(draft & submit, set())
 		self.assertEqual(submit & cancel, set())
 		self.assertEqual(draft & cancel, set())
+
+	# --- watermark safety -----------------------------------------------
+	# Regression cover for the worst failure this sync can have: Amazon returns
+	# an order, we decline to import it, and the watermark advances past it
+	# anyway — so it is never offered again and is silently lost.
+	def test_clean_run_advances_the_watermark_to_the_window_end(self):
+		end = get_datetime("2026-08-03 12:00:00")
+		self.assertEqual(orders._capped_watermark(end, None), end)
+
+	def test_a_failed_order_holds_the_watermark_behind_it(self):
+		end = get_datetime("2026-08-03 12:00:00")
+		failed_at = get_datetime("2026-08-03 11:30:00")
+		held = orders._capped_watermark(end, failed_at)
+		# strictly before the failed order, so the next run re-includes it
+		self.assertLess(held, failed_at)
+		self.assertEqual(held, get_datetime("2026-08-03 11:29:59"))
+
+	def test_watermark_never_moves_forward_past_a_failure(self):
+		"""Even a failure timestamped after the window end can't push it on."""
+		end = get_datetime("2026-08-03 12:00:00")
+		held = orders._capped_watermark(end, get_datetime("2026-08-03 18:00:00"))
+		self.assertEqual(held, end)
+
+	def test_oldest_failure_wins(self):
+		"""Several failures in one run: the watermark must sit behind them all."""
+		a = get_datetime("2026-08-03 11:30:00")
+		b = get_datetime("2026-08-03 10:00:00")
+		oldest = orders._earlier(orders._earlier(None, a), b)
+		self.assertEqual(oldest, b)
+		self.assertIsNone(orders._earlier(None, None))
+		self.assertEqual(orders._earlier(a, None), a)
+
+	def test_non_persisting_outcomes_are_the_ones_without_a_sales_order(self):
+		"""If an outcome that creates no Sales Order ever drops out of this
+		tuple, orders start being skipped silently again."""
+		self.assertIn("skipped_unresolved", orders.NON_PERSISTING_OUTCOMES)
+		self.assertIn("conflict", orders.NON_PERSISTING_OUTCOMES)
+		# outcomes that DID leave a Sales Order behind must not be in it
+		for outcome in ("created", "updated", "unchanged"):
+			self.assertNotIn(outcome, orders.NON_PERSISTING_OUTCOMES)
