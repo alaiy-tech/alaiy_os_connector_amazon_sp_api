@@ -41,18 +41,26 @@ frappe.listview_settings["Sales Order"] = frappe.listview_settings["Sales Order"
 					},
 					10
 				);
-				// Orders still import when a SKU isn't linked — the lines book against
-				// the placeholder Item — so this is advisory, not a failure.
+				// An unlinked SKU is NOT a failure — the order imported, the line just
+				// booked against the placeholder Item. So this is a passing toast, not
+				// a modal: a backfill can touch hundreds of orders, and a blocking
+				// orange dialog on a successful import reads like something broke.
+				// The full list lives in the Error Log and the run summary.
 				const unmapped = data.unmapped_skus || [];
 				if (unmapped.length) {
-					frappe.msgprint({
-						title: __("Imported with unmapped SKUs"),
-						indicator: "orange",
-						message: __(
-							"These SKUs aren't linked to an Item, so their order lines booked against the placeholder Item:<br><br><b>{0}</b><br><br>Set the <b>Product</b> field on each matching Amazon Listing so future orders map correctly. Orders already imported are not re-pointed automatically.",
-							[unmapped.map((s) => frappe.utils.escape_html(s)).join("<br>")]
-						),
-					});
+					const shown = unmapped.slice(0, 3).join(", ");
+					const rest = unmapped.length - 3;
+					frappe.show_alert(
+						{
+							message: __("Imported. {0} SKU(s) not linked to an Item yet: {1}{2}", [
+								unmapped.length,
+								frappe.utils.escape_html(shown),
+								rest > 0 ? __(" +{0} more", [rest]) : "",
+							]),
+							indicator: "blue",
+						},
+						10
+					);
 				}
 				// The watermark stopped short because some orders didn't land. Say so
 				// loudly — the alternative failure mode (silently stepping over them)

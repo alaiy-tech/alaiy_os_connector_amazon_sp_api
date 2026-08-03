@@ -469,22 +469,31 @@ def _has_downstream_documents(so_name):
 
 
 # --- unmapped-SKU reporting --------------------------------------------------
-def _note_unmapped(config, amazon_order_id, unmapped):
-	"""Record SKUs that fell back, without failing the order.
+def _note_unmapped(config, unmapped):
+	"""Record SKUs that fell back to the placeholder.
 
-	These are collected per run so the summary can name them once, rather than
-	the operator having to reconstruct the list from the Error Log.
+	Accumulate only — no per-order Error Log. The order *imported*; an unlinked
+	SKU is a catalog gap to tidy up, not an error, and a backfill over hundreds
+	of such orders would otherwise bury the Error Log in rows about successful
+	imports. `_report_unmapped` writes one aggregated entry per run instead.
 	"""
 	if not unmapped:
 		return
 	config["unmapped_skus"].update(unmapped)
+
+
+def _report_unmapped(unmapped_skus):
+	"""One Error Log entry per run naming every SKU that needs linking."""
+	if not unmapped_skus:
+		return
 	frappe.log_error(
-		title=f"Amazon order {amazon_order_id}: imported with unmapped SKUs",
+		title=f"Amazon orders: {len(unmapped_skus)} SKU(s) imported against the placeholder Item",
 		message=(
-			f"No Item is linked to: {', '.join(sorted(set(unmapped)))}.\n"
-			"These lines booked against the placeholder Item. Link each SKU on its "
-			"Amazon Listing (Product field) so future orders map correctly — already "
-			"imported orders are not re-pointed automatically."
+			"These orders imported successfully — this is a catalog gap, not a failure.\n\n"
+			"No Item is linked to:\n"
+			+ "\n".join(f"  {sku}" for sku in sorted(unmapped_skus))
+			+ "\n\nSet the Product field on each matching Amazon Listing so future orders "
+			"map correctly. Orders already imported are not re-pointed automatically."
 		),
 	)
 
@@ -547,7 +556,7 @@ def _upsert_order_unlocked(order, mp, client, config, amazon_order_id):
 	)
 	if rows is None:
 		return _park_unmapped(amazon_order_id, unmapped)
-	_note_unmapped(config, amazon_order_id, unmapped)
+	_note_unmapped(config, unmapped)
 	if not rows:
 		return "unchanged"
 
@@ -646,7 +655,7 @@ def _refresh_draft(so_name, order, status, amazon_order_id, client, config):
 	)
 	if rows is None:
 		return _park_unmapped(amazon_order_id, unmapped)
-	_note_unmapped(config, amazon_order_id, unmapped)
+	_note_unmapped(config, unmapped)
 	if not rows:
 		return "unchanged"
 
@@ -841,8 +850,10 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 		summary.update({"success": False, "seen": seen, "error": str(e), **counts})
 
 	# Named in the summary so the operator sees what still needs linking without
-	# digging through the Error Log.
+	# digging through the Error Log, and logged once per run rather than once
+	# per order.
 	summary["unmapped_skus"] = sorted(config["unmapped_skus"]) if config else []
+	_report_unmapped(summary["unmapped_skus"])
 	return _notify(summary, notify_user)
 
 
