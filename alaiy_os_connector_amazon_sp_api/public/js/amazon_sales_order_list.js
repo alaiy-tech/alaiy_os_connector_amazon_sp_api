@@ -54,6 +54,24 @@ frappe.listview_settings["Sales Order"] = frappe.listview_settings["Sales Order"
 						),
 					});
 				}
+				// The watermark stopped short because some orders didn't land. Say so
+				// loudly — the alternative failure mode (silently stepping over them)
+				// is exactly what this guards against.
+				if (data.watermark_held_at) {
+					frappe.msgprint({
+						title: __("Sync position held back"),
+						indicator: "orange",
+						message: __(
+							"Some orders were returned by Amazon but not imported, so the sync position was held at <b>{0}</b> instead of moving to the end of the window. They'll be retried on the next run.<br><br>Affected orders: <b>{1}</b><br><br>See the Error Log for why. Until they import or are resolved, each run re-reads from that point.",
+							[
+								frappe.utils.escape_html(data.watermark_held_at),
+								(data.retry_orders || [])
+									.map((i) => frappe.utils.escape_html(i))
+									.join(", ") || __("see Error Log"),
+							]
+						),
+					});
+				}
 				if (data.skipped_unresolved) {
 					frappe.msgprint(
 						__(
