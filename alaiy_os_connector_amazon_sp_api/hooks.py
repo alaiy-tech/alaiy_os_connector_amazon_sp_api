@@ -25,10 +25,13 @@ after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 alaiy_os_sidebar_connector_items = [
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
 	 "link_to": "Amazon Listing", "label": "Listings", "icon": "list"},
-	# Orders are plain Sales Orders — there's no Amazon-specific DocType to
-	# point at. The `amazon_order_id` standard filter narrows the list to ours.
-	{"connector_id": "amazon_sp_api", "link_type": "DocType",
-	 "link_to": "Sales Order", "label": "Orders", "icon": "shopping-cart"},
+	# No "Orders" row: orders are plain Sales Orders, and core's
+	# _connector_extra_sidebar_items only forwards link_type/link_to/label/icon
+	# — it drops `filters`/`route_options` — so the link could only ever open
+	# the *unfiltered* Sales Order list. That's an Amazon-labelled shortcut to
+	# every order in the system, including other connectors', which is worse
+	# than no row at all. Sales Order's own "Sales Channel" standard filter
+	# covers the real need until core learns to pass filters through.
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
 	 "link_to": "Account Health Metric", "label": "Account Health", "icon": "heart-pulse"},
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
