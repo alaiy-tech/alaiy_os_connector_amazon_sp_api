@@ -32,7 +32,7 @@ frappe.listview_settings["Sales Order"] = frappe.listview_settings["Sales Order"
 			if (data && data.success) {
 				const parts = ["created", "updated", "unchanged", "skipped_unresolved"]
 					.filter((k) => data[k])
-					.map((k) => `${data[k]} ${k.replace("skipped_unresolved", "unmapped")}`)
+					.map((k) => `${data[k]} ${k.replace("skipped_unresolved", "not imported")}`)
 					.join(", ");
 				frappe.show_alert(
 					{
@@ -41,10 +41,23 @@ frappe.listview_settings["Sales Order"] = frappe.listview_settings["Sales Order"
 					},
 					10
 				);
+				// Orders still import when a SKU isn't linked — the lines book against
+				// the placeholder Item — so this is advisory, not a failure.
+				const unmapped = data.unmapped_skus || [];
+				if (unmapped.length) {
+					frappe.msgprint({
+						title: __("Imported with unmapped SKUs"),
+						indicator: "orange",
+						message: __(
+							"These SKUs aren't linked to an Item, so their order lines booked against the placeholder Item:<br><br><b>{0}</b><br><br>Set the <b>Product</b> field on each matching Amazon Listing so future orders map correctly. Orders already imported are not re-pointed automatically.",
+							[unmapped.map((s) => frappe.utils.escape_html(s)).join("<br>")]
+						),
+					});
+				}
 				if (data.skipped_unresolved) {
 					frappe.msgprint(
 						__(
-							"{0} order(s) were not imported because their SKUs aren't linked to an Item. Set the Product field on the matching Amazon Listing, then re-run the sync. See the Error Log for the SKUs.",
+							"{0} order(s) could not be imported at all — the placeholder Item could not be created. Set 'Unmapped SKU Item' under Orders on the Amazon Connection.",
 							[data.skipped_unresolved]
 						)
 					);

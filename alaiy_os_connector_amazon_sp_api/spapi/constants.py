@@ -49,6 +49,13 @@ FULFILLMENT_CHANNEL_CODES = {
 # --- Orders API (v0) --------------------------------------------------------
 ORDERS_PATH = "/orders/v0/orders"
 
+# Shared placeholder Item for order lines whose SellerSKU isn't linked to
+# anything in the catalog. One placeholder for all of them, deliberately — a
+# stub Item per unknown SKU would fill the catalog with things that look like
+# real, sellable products. Non-stock, so it never demands inventory that
+# doesn't exist. Overridable per site via Amazon Connection.orders_fallback_item.
+UNMAPPED_ITEM_CODE = "Amazon Unmapped Item"
+
 # Value written to Sales Order.sales_channel. That field is deliberately
 # generic (not `amazon_*`): it answers "which channel did this order come
 # from" for every connector, so a sibling connector populates the same field

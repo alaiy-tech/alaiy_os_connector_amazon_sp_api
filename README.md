@@ -174,9 +174,9 @@ and emits the `amazon_sync_all_complete` realtime event to the caller when done.
 
 ### Order sync
 
-Set **Default Customer** (and optionally Company, Warehouse, Price List) under
-**Orders** on the Amazon Connection first — the scheduled job stays dormant
-until a customer is set. Buyer info is a restricted SP-API endpoint, so all
+Set **Default Customer** (and optionally Company, Warehouse, Price List,
+Unmapped SKU Item) under **Orders** on the Amazon Connection first — the
+scheduled job stays dormant until a customer is set. Buyer info is a restricted SP-API endpoint, so all
 orders book against that one customer; the buyer stays traceable via
 `amazon_order_id`.
 
@@ -187,9 +187,16 @@ orders book against that one customer; the buyer stays traceable via
   submitted, and a cancellation cancels the Sales Order — unless a Delivery Note
   or Sales Invoice already exists against it, in which case the conflict is
   logged and the documents are left alone.
-- **Unmapped SKUs park the whole order.** No Item is ever auto-created. Link the
-  SKU via the **Product** field on its Amazon Listing and re-run; the skipped
-  SKUs are named in the Error Log.
+- **Unmapped SKUs don't block the order.** A `SellerSKU` that isn't linked to a
+  catalog Item still imports: the line books against a shared placeholder
+  (**Unmapped SKU Item** on the connection, or an auto-created non-stock
+  `Amazon Unmapped Item`), carrying Amazon's own title and the real SKU on the
+  row. The sync summary and the Error Log name every SKU that fell back, so you
+  can set the **Product** field on the matching Amazon Listing afterwards.
+  Already-imported orders are *not* re-pointed automatically. No Item is ever
+  auto-created per SKU — that would fill the catalog with stubs that look
+  sellable. An order is only refused outright if even the placeholder can't be
+  resolved.
 - **Scope is the order header plus line items.** Shipping charges, Amazon fees,
   and settlements are not mapped yet, so `amazon_order_total` (Amazon's own
   figure) can legitimately differ from the Sales Order grand total — the field

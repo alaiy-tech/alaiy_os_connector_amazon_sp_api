@@ -84,9 +84,45 @@ class TestAmazonOrderMapping(UnitTestCase):
 		self.assertEqual(rows, [])
 		self.assertEqual(unresolved, [])
 
-	def test_unmapped_sku_parks_the_whole_order(self):
-		"""Importing a partial order would understate it, so an unresolved SKU
-		fails the order rather than dropping the line."""
+	def test_unmapped_sku_falls_back_instead_of_blocking(self):
+		"""An unlinked SKU must not stop the order landing — the line books
+		against the placeholder, carrying the real SKU and Amazon's title."""
+		items = [
+			{"SellerSKU": "SKU-A", "QuantityOrdered": 1, "ItemPrice": {"Amount": "5"}},
+			{
+				"SellerSKU": "SKU-NOPE",
+				"QuantityOrdered": 2,
+				"ItemPrice": {"Amount": "20"},
+				"ASIN": "B0HCB9C5T3",
+				"Title": "Universal Seat Cover",
+			},
+		]
+		with patch.object(
+			orders, "_resolve_item_code", side_effect=lambda sku: "ITEM-A" if sku == "SKU-A" else None
+		):
+			rows, unmapped = orders._line_items(items, "WH", "2026-08-10", fallback_item="AMZ-UNMAPPED")
+
+		self.assertEqual(len(rows), 2)  # both lines survive
+		self.assertEqual(unmapped, ["SKU-NOPE"])  # reported, not fatal
+		fallback = rows[1]
+		self.assertEqual(fallback["item_code"], "AMZ-UNMAPPED")
+		self.assertEqual(fallback["rate"], 10.0)  # pricing still correct
+		self.assertEqual(fallback["amazon_seller_sku"], "SKU-NOPE")
+		self.assertEqual(fallback["item_name"], "Universal Seat Cover")
+		self.assertIn("SKU: SKU-NOPE", fallback["description"])
+		self.assertIn("B0HCB9C5T3", fallback["description"])
+
+	def test_unmapped_sku_without_a_placeholder_still_parks(self):
+		"""The one remaining way an order is refused: nothing to fall back to."""
+		items = [{"SellerSKU": "SKU-NOPE", "QuantityOrdered": 1, "ItemPrice": {"Amount": "5"}}]
+		with patch.object(orders, "_resolve_item_code", return_value=None):
+			rows, unmapped = orders._line_items(items, "WH", "2026-08-10", fallback_item=None)
+		self.assertIsNone(rows)
+		self.assertEqual(unmapped, ["SKU-NOPE"])
+
+	def test_mapped_line_survives_when_a_sibling_is_unmapped(self):
+		"""Without a placeholder, a partially-resolvable order keeps the lines it
+		can and reports the rest, rather than silently importing a short order."""
 		items = [
 			{"SellerSKU": "SKU-A", "QuantityOrdered": 1, "ItemPrice": {"Amount": "5"}},
 			{"SellerSKU": "SKU-NOPE", "QuantityOrdered": 1, "ItemPrice": {"Amount": "5"}},
@@ -94,9 +130,10 @@ class TestAmazonOrderMapping(UnitTestCase):
 		with patch.object(
 			orders, "_resolve_item_code", side_effect=lambda sku: "ITEM-A" if sku == "SKU-A" else None
 		):
-			rows, unresolved = orders._line_items(items, "WH", "2026-08-10")
-		self.assertIsNone(rows)
-		self.assertEqual(unresolved, ["SKU-NOPE"])
+			rows, unmapped = orders._line_items(items, "WH", "2026-08-10", fallback_item=None)
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0]["item_code"], "ITEM-A")
+		self.assertEqual(unmapped, ["SKU-NOPE"])
 
 	# --- duplicate merge ------------------------------------------------
 	def test_duplicate_item_codes_merge_without_changing_the_total(self):
