@@ -16,9 +16,13 @@ after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 # The core builds the section itself (labelled from the OS Connector
 # Registry row, with an automatic Dashboard link) and threads it in before the
 # trailing Settings item — so ordering is the core's job, not ours.
+#
+# No "Connection" row here: core's Dashboard link already points at Amazon
+# Connection. _connector_link_target() sends Dashboard to a Page named after
+# the connector_id when one exists and falls back to the registry row's
+# settings_doctype otherwise — this app ships no `amazon_sp_api` Page, so the
+# fallback is Amazon Connection, and a Connection row would just duplicate it.
 alaiy_os_sidebar_connector_items = [
-	{"connector_id": "amazon_sp_api", "link_type": "DocType",
-	 "link_to": "Amazon Connection", "label": "Connection", "icon": "plug"},
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
 	 "link_to": "Amazon Listing", "label": "Listings", "icon": "list"},
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
