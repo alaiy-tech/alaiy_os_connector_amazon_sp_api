@@ -23,6 +23,7 @@
   "orders_company",
   "orders_warehouse",
   "orders_selling_price_list",
+  "orders_fallback_item",
   "column_break_orders",
   "orders_sync_from",
   "last_orders_sync_at"
@@ -139,6 +140,13 @@
    "fieldtype": "Link",
    "label": "Selling Price List",
    "options": "Price List"
+  },
+  {
+   "description": "Order lines whose SellerSKU isn't linked to a catalog Item book against this. Leave blank to auto-create a non-stock \"Amazon Unmapped Item\" placeholder on first use. The real SKU is kept on each order line.",
+   "fieldname": "orders_fallback_item",
+   "fieldtype": "Link",
+   "label": "Unmapped SKU Item",
+   "options": "Item"
   },
   {
    "fieldname": "column_break_orders",

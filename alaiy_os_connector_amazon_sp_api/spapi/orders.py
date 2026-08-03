@@ -45,6 +45,7 @@ from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	ORDERS_RECENT_BLIND_SPOT,
 	ORDERS_SYNC_OVERLAP,
 	SALES_CHANNEL,
+	UNMAPPED_ITEM_CODE,
 )
 from alaiy_os_connector_amazon_sp_api.spapi.listings import _marketplace
 
@@ -195,9 +196,10 @@ def fetch_order_items(client, amazon_order_id):
 def _resolve_item_code(seller_sku):
 	"""SellerSKU -> Item code, via the Amazon Listing register.
 
-	Never creates an Item: a mis-resolved SKU silently books revenue against
-	the wrong product, and an auto-created one pollutes the catalog with
-	unmanaged stubs. Unresolvable SKUs park the whole order instead.
+	Never creates an Item *per SKU*: a mis-resolved SKU silently books revenue
+	against the wrong product, and a stub per unknown SKU fills the catalog with
+	things that look sellable but aren't managed. Unmatched SKUs go to the
+	shared placeholder instead (see `_fallback_item`) so the order still lands.
 	"""
 	if not seller_sku:
 		return None
@@ -211,41 +213,97 @@ def _resolve_item_code(seller_sku):
 	return None
 
 
-def _line_items(order_items, warehouse, delivery_date):
-	"""Amazon order items -> Sales Order Item rows, or (None, unresolved_skus).
+def _fallback_item(conn):
+	"""The placeholder Item unmatched SKUs book against.
+
+	An explicit `orders_fallback_item` wins; otherwise one shared non-stock Item
+	is created on demand. Non-stock matters — a stock placeholder would demand
+	real inventory the moment anyone raised a Delivery Note against the order.
+
+	Returns None only if creation fails, which is then the single remaining
+	reason an order gets parked.
+	"""
+	configured = conn.orders_fallback_item
+	if configured and frappe.db.exists("Item", configured):
+		return configured
+
+	if frappe.db.exists("Item", UNMAPPED_ITEM_CODE):
+		return UNMAPPED_ITEM_CODE
+	try:
+		item = frappe.new_doc("Item")
+		item.item_code = UNMAPPED_ITEM_CODE
+		item.item_name = UNMAPPED_ITEM_CODE
+		item.item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
+		item.stock_uom = "Nos"
+		item.is_stock_item = 0
+		item.description = (
+			"Placeholder for Amazon order lines whose SellerSKU isn't linked to a catalog Item. "
+			"The real SKU is on each Sales Order Item row (Amazon Seller SKU)."
+		)
+		item.flags.ignore_permissions = True
+		item.insert()
+		frappe.db.commit()
+		return UNMAPPED_ITEM_CODE
+	except Exception:
+		frappe.log_error(
+			title="Amazon orders: failed to create the unmapped-SKU placeholder Item",
+			message=frappe.get_traceback(),
+		)
+		return None
+
+
+def _line_items(order_items, warehouse, delivery_date, fallback_item=None):
+	"""Amazon order items -> Sales Order Item rows, plus the SKUs that fell back.
 
 	ItemPrice is the extended price for the whole QuantityOrdered, not a unit
 	rate, and PromotionDiscount is likewise an order-item total — so the unit
 	rate is (ItemPrice - PromotionDiscount) / qty.
+
+	An unmatched SKU does not block the order: the line books against the shared
+	placeholder, carrying Amazon's own title and the real SKU so nothing is lost
+	and it can be re-pointed once the catalog catches up. `(None, skus)` comes
+	back only when there was no placeholder to fall back to.
 	"""
 	rows = []
-	unresolved = []
+	unmapped = []
 	for item in order_items:
 		sku = item.get("SellerSKU")
 		qty = cint(item.get("QuantityOrdered"))
 		if qty <= 0:
 			# Fully cancelled line: Amazon keeps the row with QuantityOrdered 0.
 			continue
-		item_code = _resolve_item_code(sku)
-		if not item_code:
-			unresolved.append(sku or item.get("ASIN") or "?")
-			continue
 		gross = flt(_money(item.get("ItemPrice")))
 		discount = flt(_money(item.get("PromotionDiscount")))
-		rows.append(
-			{
-				"item_code": item_code,
-				"qty": qty,
-				"rate": (gross - discount) / qty if qty else 0,
-				"warehouse": warehouse,
-				"delivery_date": delivery_date,
-				"amazon_order_item_id": item.get("OrderItemId"),
-				"amazon_seller_sku": sku,
-			}
-		)
-	if unresolved:
-		return None, unresolved
-	return rows, []
+		row = {
+			"qty": qty,
+			"rate": (gross - discount) / qty if qty else 0,
+			"warehouse": warehouse,
+			"delivery_date": delivery_date,
+			"amazon_order_item_id": item.get("OrderItemId"),
+			"amazon_seller_sku": sku,
+		}
+
+		item_code = _resolve_item_code(sku)
+		if item_code:
+			row["item_code"] = item_code
+		else:
+			unmapped.append(sku or item.get("ASIN") or "?")
+			if not fallback_item:
+				continue
+			# Without Amazon's own title on the row, every placeholder line on
+			# the order renders identically and the SKU is invisible on print.
+			title = (item.get("Title") or "").strip()
+			asin = item.get("ASIN")
+			row["item_code"] = fallback_item
+			row["item_name"] = (title or f"Amazon SKU {sku}")[:140]
+			row["description"] = " | ".join(
+				p for p in (title, f"SKU: {sku}" if sku else None, f"ASIN: {asin}" if asin else None) if p
+			)
+		rows.append(row)
+
+	if not rows and unmapped:
+		return None, unmapped
+	return rows, unmapped
 
 
 def _money(node):
@@ -410,6 +468,40 @@ def _has_downstream_documents(so_name):
 	return False
 
 
+# --- unmapped-SKU reporting --------------------------------------------------
+def _note_unmapped(config, amazon_order_id, unmapped):
+	"""Record SKUs that fell back, without failing the order.
+
+	These are collected per run so the summary can name them once, rather than
+	the operator having to reconstruct the list from the Error Log.
+	"""
+	if not unmapped:
+		return
+	config["unmapped_skus"].update(unmapped)
+	frappe.log_error(
+		title=f"Amazon order {amazon_order_id}: imported with unmapped SKUs",
+		message=(
+			f"No Item is linked to: {', '.join(sorted(set(unmapped)))}.\n"
+			"These lines booked against the placeholder Item. Link each SKU on its "
+			"Amazon Listing (Product field) so future orders map correctly — already "
+			"imported orders are not re-pointed automatically."
+		),
+	)
+
+
+def _park_unmapped(amazon_order_id, unmapped):
+	"""Only reachable when even the placeholder Item couldn't be resolved."""
+	frappe.log_error(
+		title=f"Amazon order {amazon_order_id}: not imported, no placeholder Item",
+		message=(
+			f"No Item is linked to: {', '.join(sorted(set(unmapped)))}, and the fallback "
+			"placeholder could not be created. Set 'Unmapped SKU Item' under Orders on the "
+			"Amazon Connection to an existing Item, then re-run the sync."
+		),
+	)
+	return "skipped_unresolved"
+
+
 # --- upsert ------------------------------------------------------------------
 def upsert_order(order, mp, client, config):
 	"""Create or update the Sales Order for one Amazon order.
@@ -447,16 +539,15 @@ def _upsert_order_unlocked(order, mp, client, config, amazon_order_id):
 	if not order_items:
 		return "unchanged"
 
-	rows, unresolved = _line_items(order_items, config["warehouse"], config["delivery_date_for"](order))
-	if unresolved:
-		frappe.log_error(
-			title=f"Amazon order {amazon_order_id}: unmapped SKUs, not imported",
-			message=(
-				f"No Item is linked to: {', '.join(sorted(set(unresolved)))}.\n"
-				"Link the SKU on its Amazon Listing (Product field), then re-run the sync."
-			),
-		)
-		return "skipped_unresolved"
+	rows, unmapped = _line_items(
+		order_items,
+		config["warehouse"],
+		config["delivery_date_for"](order),
+		fallback_item=config["fallback_item"],
+	)
+	if rows is None:
+		return _park_unmapped(amazon_order_id, unmapped)
+	_note_unmapped(config, amazon_order_id, unmapped)
 	if not rows:
 		return "unchanged"
 
@@ -547,16 +638,15 @@ def _refresh_draft(so_name, order, status, amazon_order_id, client, config):
 	if not order_items:
 		return "unchanged"
 
-	rows, unresolved = _line_items(order_items, config["warehouse"], config["delivery_date_for"](order))
-	if unresolved:
-		frappe.log_error(
-			title=f"Amazon order {amazon_order_id}: unmapped SKUs, draft left as-is",
-			message=(
-				f"No Item is linked to: {', '.join(sorted(set(unresolved)))}.\n"
-				"Link the SKU on its Amazon Listing (Product field), then re-run the sync."
-			),
-		)
-		return "skipped_unresolved"
+	rows, unmapped = _line_items(
+		order_items,
+		config["warehouse"],
+		config["delivery_date_for"](order),
+		fallback_item=config["fallback_item"],
+	)
+	if rows is None:
+		return _park_unmapped(amazon_order_id, unmapped)
+	_note_unmapped(config, amazon_order_id, unmapped)
 	if not rows:
 		return "unchanged"
 
@@ -615,7 +705,11 @@ def _build_config(conn, mp):
 		"customer": _customer(conn),
 		"warehouse": warehouse,
 		"price_list": _price_list(conn),
+		"fallback_item": _fallback_item(conn),
 		"delivery_date_for": delivery_date_for,
+		# Accumulated across the run so the summary can name every SKU that
+		# needs linking, in one place.
+		"unmapped_skus": set(),
 	}
 
 
@@ -654,6 +748,7 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 	counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped_unresolved": 0, "conflict": 0}
 	seen = 0
 	truncated = False
+	config = None
 
 	try:
 		config = _build_config(conn, mp)
@@ -694,6 +789,9 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 		frappe.log_error(title="Amazon order sync failed", message=frappe.get_traceback())
 		summary.update({"success": False, "seen": seen, "error": str(e), **counts})
 
+	# Named in the summary so the operator sees what still needs linking without
+	# digging through the Error Log.
+	summary["unmapped_skus"] = sorted(config["unmapped_skus"]) if config else []
 	return _notify(summary, notify_user)
 
 
@@ -716,6 +814,7 @@ def backfill_orders(marketplace=None, date_from=None, date_to=None, notify_user=
 	seen = 0
 	chunks = 0
 	failures = []
+	unmapped = set()
 
 	cursor = start
 	while cursor < end:
@@ -725,6 +824,7 @@ def backfill_orders(marketplace=None, date_from=None, date_to=None, notify_user=
 		seen += cint(result.get("seen"))
 		for key in totals:
 			totals[key] += cint(result.get(key))
+		unmapped.update(result.get("unmapped_skus") or [])
 		if not result.get("success"):
 			failures.append(f"{cursor} .. {chunk_end}: {result.get('error')}")
 		cursor = chunk_end
@@ -736,6 +836,7 @@ def backfill_orders(marketplace=None, date_from=None, date_to=None, notify_user=
 		"window_to": str(end),
 		"chunks": chunks,
 		"seen": seen,
+		"unmapped_skus": sorted(unmapped),
 		**totals,
 	}
 	if failures:
