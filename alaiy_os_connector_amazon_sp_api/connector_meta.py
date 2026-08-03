@@ -12,13 +12,16 @@ connector_meta = {
 	"connector_name": "Amazon (SP-API)",
 	"connector_app": "alaiy_os_connector_amazon_sp_api",
 	"connector_type": "channel",
-	"description": "Amazon Selling Partner API connector: listings, account health, and listing state.",
+	"description": "Amazon Selling Partner API connector: listings, orders, account health, and listing state.",
 	"icon": "shopping-cart",
 	"settings_doctype": "Amazon Connection",
 	"test_method": "alaiy_os_connector_amazon_sp_api.api.test_connection",
-	"sync_categories_method": None,
+	# The registry's sync slots are generic — each is named by its *_label, the
+	# same way the Shopify connector hangs its order pull off `categories`.
+	"sync_categories_method": "alaiy_os_connector_amazon_sp_api.api.sync_orders",
+	"sync_categories_label": "Orders",
 	"sync_items_method": None,
-	"sync_status_method": None,
+	"sync_status_method": "alaiy_os_connector_amazon_sp_api.api.get_orders_sync_status",
 	"is_enabled": 1,
 	"connection_status": "untested",
 }

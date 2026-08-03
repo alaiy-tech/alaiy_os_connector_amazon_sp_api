@@ -17,7 +17,15 @@
   "selling_partner_id",
   "refresh_token",
   "column_break_creds",
-  "primary_marketplace"
+  "primary_marketplace",
+  "orders_section",
+  "orders_customer",
+  "orders_company",
+  "orders_warehouse",
+  "orders_selling_price_list",
+  "column_break_orders",
+  "orders_sync_from",
+  "last_orders_sync_at"
  ],
  "fields": [
   {
@@ -97,6 +105,57 @@
    "fieldtype": "Link",
    "label": "Primary Marketplace",
    "options": "Amazon Marketplace"
+  },
+  {
+   "description": "Where synced Seller Central orders land. Orders are created as Sales Orders directly.",
+   "fieldname": "orders_section",
+   "fieldtype": "Section Break",
+   "label": "Orders"
+  },
+  {
+   "description": "Every Amazon order books against this customer. Buyer identity is a restricted SP-API endpoint, so there is no real buyer to create a Customer from; the buyer is traceable from the Amazon Order ID.",
+   "fieldname": "orders_customer",
+   "fieldtype": "Link",
+   "label": "Default Customer",
+   "options": "Customer"
+  },
+  {
+   "description": "Defaults to the global default company when unset.",
+   "fieldname": "orders_company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "description": "Must be a leaf (non-Group) warehouse, or stock documents raised from these orders will fail.",
+   "fieldname": "orders_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "default": "Standard Selling",
+   "fieldname": "orders_selling_price_list",
+   "fieldtype": "Link",
+   "label": "Selling Price List",
+   "options": "Price List"
+  },
+  {
+   "fieldname": "column_break_orders",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "How far back the first sync reaches. Leave blank to start from 7 days ago.",
+   "fieldname": "orders_sync_from",
+   "fieldtype": "Datetime",
+   "label": "Sync Orders From"
+  },
+  {
+   "description": "Watermark for the scheduled poll. Advances only after a complete run; clear it to force a re-read.",
+   "fieldname": "last_orders_sync_at",
+   "fieldtype": "Datetime",
+   "label": "Last Orders Sync At",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

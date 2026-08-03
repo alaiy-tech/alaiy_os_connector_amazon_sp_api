@@ -53,7 +53,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Context",
-   "options": "oauth\nlisting\nhealth\nreconcile"
+   "options": "oauth\nlisting\nhealth\nreconcile\norders"
   },
   {
    "fieldname": "duration_ms",

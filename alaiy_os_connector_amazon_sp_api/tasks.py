@@ -4,7 +4,7 @@
 
 import frappe
 
-from alaiy_os_connector_amazon_sp_api.spapi import health, reconcile
+from alaiy_os_connector_amazon_sp_api.spapi import health, orders, reconcile
 
 
 def _connection_ready():
@@ -38,6 +38,23 @@ def reconcile_listings():
 			title="Amazon scheduled listing reconciliation failed", message=frappe.get_traceback()
 		)
 		_alert_managers("Amazon listing reconciliation failed")
+
+
+def sync_orders():
+	"""Every 30m: pull orders updated since the watermark into Sales Orders.
+
+	No-ops when no default customer is configured — an unconfigured site would
+	otherwise email its managers every half hour about a feature it isn't using.
+	"""
+	if not _connection_ready():
+		return
+	if not frappe.db.get_single_value("Amazon Connection", "orders_customer"):
+		return
+	try:
+		orders.sync_orders()
+	except Exception:
+		frappe.log_error(title="Amazon scheduled order sync failed", message=frappe.get_traceback())
+		_alert_managers("Amazon order sync failed")
 
 
 def refresh_connection_status():
