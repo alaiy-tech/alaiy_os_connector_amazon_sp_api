@@ -147,6 +147,18 @@ def _ensure_order_custom_fields():
 				"read_only": 1,
 				"insert_after": "amazon_order_item_id",
 			},
+			{
+				# Per line, not per order: one order routinely spans several
+				# ASINs. Indexed because "what did we sell of this ASIN" is the
+				# question this field exists to answer.
+				"fieldname": "amazon_asin",
+				"label": "Amazon ASIN",
+				"fieldtype": "Data",
+				"read_only": 1,
+				"search_index": 1,
+				"insert_after": "amazon_seller_sku",
+				"description": "Amazon's catalog identifier for this line, as reported on the order. Recorded even when the SKU isn't linked to an Item.",
+			},
 		],
 	}
 	for fields in custom_fields.values():

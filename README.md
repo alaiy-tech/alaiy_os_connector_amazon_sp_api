@@ -66,7 +66,8 @@ Orders deliberately have **no DocType of their own** — they are created as
 ERPNext **Sales Orders** carrying `amazon_order_id`, `amazon_order_status`,
 `amazon_marketplace`, `amazon_fulfillment_channel`, `amazon_order_total`, and
 `amazon_last_updated_at` (custom fields installed by `install.py`, plus
-`amazon_order_item_id` / `amazon_seller_sku` on Sales Order Item).
+`amazon_order_item_id` / `amazon_seller_sku` / `amazon_asin` on Sales Order
+Item — per line, since one order routinely spans several ASINs).
 
 `install.py` also adds **`sales_channel`** to Sales Order — a deliberately
 *generic* field (this connector writes `Amazon`) so every channel connector
