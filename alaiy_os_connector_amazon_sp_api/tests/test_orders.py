@@ -10,14 +10,18 @@ wrong revenue, and a bad merge makes ERPNext reject the document outright.
 
 from unittest.mock import patch
 
+import frappe
 from frappe.tests import UnitTestCase
 from frappe.utils import get_datetime
+from frappe.utils import now_datetime
 
 from alaiy_os_connector_amazon_sp_api.spapi import orders
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	ORDER_STATUS_CANCEL,
 	ORDER_STATUS_DRAFT,
 	ORDER_STATUS_SUBMIT,
+	ORDERS_DEFAULT_LOOKBACK_DAYS,
+	ORDERS_SYNC_OVERLAP,
 )
 
 # A deliberately non-UTC, non-half-hour zone: a UTC-only test passes even when
@@ -152,6 +156,34 @@ class TestAmazonOrderMapping(UnitTestCase):
 		# 2*10 + 3*5 = 35, over 5 units = 7.0
 		self.assertEqual(merged[0]["rate"], 7.0)
 		self.assertEqual(merged[1]["item_code"], "ITEM-B")
+
+	# --- sync window ----------------------------------------------------
+	def test_first_run_reaches_back_one_day(self):
+		"""With no watermark and no configured floor, the first sync covers the
+		last day. Short on purpose — the first run is where a misconfiguration
+		shows up, and a narrow window keeps that cheap to inspect and undo."""
+		self.assertEqual(ORDERS_DEFAULT_LOOKBACK_DAYS, 1)
+		conn = frappe._dict(last_orders_sync_at=None, orders_sync_from=None)
+		start, end = orders._resolve_window(conn, None, None)
+		age_hours = (now_datetime() - start).total_seconds() / 3600
+		self.assertAlmostEqual(age_hours, 24, delta=1)
+		self.assertLess(start, end)
+
+	def test_watermark_wins_over_the_default_lookback(self):
+		"""Once a run has completed, the watermark drives the window — the
+		1-day default must not silently re-read a day on every poll."""
+		watermark = orders.add_to_date(now_datetime(), hours=-3)
+		conn = frappe._dict(last_orders_sync_at=watermark, orders_sync_from=None)
+		start, _ = orders._resolve_window(conn, None, None)
+		# watermark minus the deliberate overlap, not now-minus-a-day
+		self.assertAlmostEqual((watermark - start).total_seconds(), ORDERS_SYNC_OVERLAP, delta=1)
+
+	def test_explicit_window_overrides_everything(self):
+		"""Backfill passes its own range and must not be re-anchored."""
+		conn = frappe._dict(last_orders_sync_at=now_datetime(), orders_sync_from=None)
+		start, end = orders._resolve_window(conn, "2026-01-01 00:00:00", "2026-01-08 00:00:00")
+		self.assertEqual(str(start), "2026-01-01 00:00:00")
+		self.assertEqual(str(end), "2026-01-08 00:00:00")
 
 	# --- status buckets -------------------------------------------------
 	def test_status_buckets_are_disjoint(self):
