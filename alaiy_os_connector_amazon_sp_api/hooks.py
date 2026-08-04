@@ -38,8 +38,10 @@ alaiy_os_sidebar_connector_items = [
 	 "link_to": "Seller Feedback", "label": "Seller Feedback", "icon": "star"},
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
 	 "link_to": "Amazon Marketplace", "label": "Marketplaces", "icon": "globe"},
-	{"connector_id": "amazon_sp_api", "link_type": "DocType",
-	 "link_to": "SP-API Log", "label": "SP-API Logs", "icon": "activity"},
+	# No "SP-API Logs" row: log links belong in the OS Settings sidebar's Logs
+	# section, which the alaiy_os_sidebar_log_items hook below already puts it
+	# in — same as every other connector (e.g. Shopify's Sync Log). Declaring it
+	# here too rendered it a second time, under this connector's own section.
 ]
 
 # Log links surfaced in the OS Settings sidebar 'Logs' section by alaiy_os_core.
