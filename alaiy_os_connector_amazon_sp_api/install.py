@@ -41,6 +41,12 @@ def _ensure_order_custom_fields():
 	status fields are allow_on_submit because these orders are submitted
 	almost immediately and Amazon keeps updating their status afterwards.
 
+	Only `amazon_*` fields here. `sales_channel` is deliberately absent: it is
+	cross-connector by design, so alaiy_os owns it (setup.install
+	.ensure_sales_channel_field plus its Custom Field fixture) and this app
+	only writes a value into it. Re-adding it here would mean two apps
+	upserting one Custom Field row.
+
 	No-op when ERPNext isn't installed: the connector's listing half works
 	perfectly well on a site without it.
 	"""
@@ -49,21 +55,6 @@ def _ensure_order_custom_fields():
 
 	custom_fields = {
 		"Sales Order": [
-			{
-				# Generic on purpose — this answers "which channel did this order
-				# come from" for any connector, so it sits in the main section
-				# (visible without expanding anything) rather than inside the
-				# Amazon block, and another connector writes its own name here
-				# instead of adding a competing field.
-				"fieldname": "sales_channel",
-				"label": "Sales Channel",
-				"fieldtype": "Data",
-				"read_only": 1,
-				"in_list_view": 1,
-				"in_standard_filter": 1,
-				"insert_after": "order_type",
-				"description": "Channel this order originated from. Set by the connector that imported it; blank for orders raised directly in AlaiyOS.",
-			},
 			{
 				"fieldname": "amazon_section",
 				"label": "Amazon",

@@ -69,11 +69,11 @@ ERPNext **Sales Orders** carrying `amazon_order_id`, `amazon_order_status`,
 `amazon_order_item_id` / `amazon_seller_sku` / `amazon_asin` on Sales Order
 Item — per line, since one order routinely spans several ASINs).
 
-`install.py` also adds **`sales_channel`** to Sales Order — a deliberately
-*generic* field (this connector writes `Amazon`) so every channel connector
-reports origin through one field instead of adding a competing one. It sits in
-the main section next to Order Type, shows as a list column, and is available
-as a standard filter. Orders raised directly in AlaiyOS leave it blank.
+Each synced order also gets **`sales_channel`** = `Amazon`. That field is
+**owned by `alaiy_os`**, not by this app — it is generic on purpose, so every
+channel connector reports origin through one core field instead of each adding
+a competing one. This connector only writes a value into it, which is why
+`alaiy_os` is a `required_app`.
 
 ## Requirements
 

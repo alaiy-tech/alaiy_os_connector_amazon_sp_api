@@ -110,7 +110,14 @@ def _fill_asin_from_description():
 
 
 def _fill_sales_channel():
-	"""Orders imported before `sales_channel` existed carry a blank channel."""
+	"""Orders imported before `sales_channel` existed carry a blank channel.
+
+	Unlike the `amazon_*` fields above, this one is created by alaiy_os, whose
+	fixture sync and after_migrate hook both run *after* post_model_sync
+	patches — so on a site where the field doesn't exist yet this legitimately
+	skips and reports 0. Only relevant for a site that has never had the field,
+	which by definition has no orders that predate it.
+	"""
 	if not frappe.get_meta("Sales Order").get_field("sales_channel"):
 		return 0
 	names = frappe.db.get_all(
