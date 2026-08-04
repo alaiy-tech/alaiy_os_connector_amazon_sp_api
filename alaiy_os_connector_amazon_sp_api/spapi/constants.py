@@ -56,10 +56,10 @@ ORDERS_PATH = "/orders/v0/orders"
 # doesn't exist. Overridable per site via Amazon Connection.orders_fallback_item.
 UNMAPPED_ITEM_CODE = "Amazon Unmapped Item"
 
-# Value written to Sales Order.sales_channel. That field is deliberately
-# generic (not `amazon_*`): it answers "which channel did this order come
-# from" for every connector, so a sibling connector populates the same field
-# with its own name rather than adding a competing one.
+# Value written to Sales Order.sales_channel. The field itself belongs to
+# alaiy_os, not to this app: it answers "which channel did this order come
+# from" for every connector, so core defines it once and each connector writes
+# its own name into it. This constant is our answer, nothing more.
 SALES_CHANNEL = "Amazon"
 
 # Orders API page size (1-100). Amazon returns fewer than this freely, so the

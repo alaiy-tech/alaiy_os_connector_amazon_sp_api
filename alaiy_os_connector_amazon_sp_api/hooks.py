@@ -5,6 +5,18 @@ app_description = "AlaiyOS Connector to interact with SP API"
 app_email = "mail@alaiy.com"
 app_license = "agpl-3.0"
 
+# Dependencies
+# ------------
+# alaiy_os owns the OS Connector Registry and sidebar this app plugs into, and
+# the cross-connector Sales Order.sales_channel field the order sync writes to
+# — without it that write silently vanishes, so the dependency is declared
+# rather than guarded at every call site.
+#
+# erpnext is deliberately NOT required: the listing half of this connector runs
+# fine on a site without it, and install.py no-ops its Sales Order fields when
+# the DocType is absent.
+required_apps = ["alaiy_os"]
+
 # Installation
 # ------------
 after_install = "alaiy_os_connector_amazon_sp_api.setup.install.after_install"
@@ -97,8 +109,6 @@ scheduler_events = {
 
 # Apps
 # ------------------
-
-# required_apps = []
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
