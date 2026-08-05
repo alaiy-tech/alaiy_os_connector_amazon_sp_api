@@ -5,8 +5,8 @@
 Create publishes an offer against an existing catalog ASIN
 (requirements=LISTING_OFFER_ONLY). Update prefers a JSON-Patch PATCH and falls
 back to a full PUT when an attribute can't be patched. Delete ends the listing.
-After every write we re-fetch the item and upsert the Amazon Listing row so the
-register reflects Amazon's actual state.
+After every write we re-fetch the item and upsert the Amazon Product Listing row
+so the register reflects Amazon's actual state.
 
 Attribute shapes (purchasable_offer, fulfillment_availability, ...) follow the
 common product-type schema; they may need per-marketplace/product-type tuning
@@ -308,7 +308,7 @@ def create_listing(
 
 
 # --- update ------------------------------------------------------------------
-# Amazon Listing fieldnames we allow through to the Listings Items attributes.
+# Amazon Product Listing fieldnames we allow through to the Listings Items attributes.
 _PATCHABLE = {
 	"title",
 	"price",
@@ -363,11 +363,11 @@ def update_listing(sku, changes, marketplace=None):
 
 def _apply_submitted_changes(sku, mp, changes, issues):
 	"""Write the operator's accepted changes to the register row (status pending)."""
-	if not frappe.db.exists("Amazon Listing", sku):
+	if not frappe.db.exists("Amazon Product Listing", sku):
 		# No local row yet (e.g. updating a SKU synced elsewhere) — fall back to a
 		# fetch so the register has something to show.
 		return sync_listing(sku, marketplace=mp.name)
-	row = frappe.get_doc("Amazon Listing", sku)
+	row = frappe.get_doc("Amazon Product Listing", sku)
 	for field in ("title", "price", "quantity", "condition", "description"):
 		if field in changes and changes[field] is not None:
 			row.set(field, changes[field])
@@ -436,7 +436,7 @@ def _build_patches(mp, changes):
 
 def _put_fallback(client, conn, mp, sku, changes):
 	"""Rebuild a full PUT from the stored row merged with the requested changes."""
-	row = frappe.get_doc("Amazon Listing", sku)
+	row = frappe.get_doc("Amazon Product Listing", sku)
 	product_type = _stored_product_type(sku)
 	if not product_type:
 		frappe.throw(_("Cannot fall back to PUT: no product type stored for {0}.").format(sku))
@@ -480,7 +480,7 @@ def _row_images(row):
 
 def _stored_product_type(sku):
 	"""Best-effort product type from the stored raw summary."""
-	raw = frappe.db.get_value("Amazon Listing", sku, "raw_summary")
+	raw = frappe.db.get_value("Amazon Product Listing", sku, "raw_summary")
 	if raw:
 		try:
 			return (json.loads(raw) or {}).get("productType")
@@ -505,8 +505,8 @@ def delete_listing(sku, marketplace=None):
 	issues = _issues_from(resp)
 	_raise_on_error_issues(issues, _("deletion"))
 
-	if frappe.db.exists("Amazon Listing", sku):
-		row = frappe.get_doc("Amazon Listing", sku)
+	if frappe.db.exists("Amazon Product Listing", sku):
+		row = frappe.get_doc("Amazon Product Listing", sku)
 		row.listing_status = "inactive"
 		row.last_synced_at = now_datetime()
 		row.save(ignore_permissions=True)
@@ -559,11 +559,11 @@ def _item_asin(sku, item):
 	asin = (summaries[0] if summaries else {}).get("asin")
 	if asin:
 		return asin
-	return frappe.db.get_value("Amazon Listing", sku, "asin")
+	return frappe.db.get_value("Amazon Product Listing", sku, "asin")
 
 
 def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, product_type=None):
-	"""Fetch one item from Amazon and upsert the Amazon Listing register row."""
+	"""Fetch one item from Amazon and upsert the Amazon Product Listing register row."""
 	mp = _marketplace(marketplace)
 	item = get_listing_item(sku, marketplace=mp.name)
 	# Content comes from the ASIN's catalog entry, not from our own listing
@@ -584,7 +584,7 @@ def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, 
 def _upsert_from_item(
 	sku, mp, item, product=None, fulfillment_channel=None, product_type=None, catalog_content=None
 ):
-	"""Upsert an Amazon Listing row from a Listings-Items payload (single GET or
+	"""Upsert an Amazon Product Listing row from a Listings-Items payload (single GET or
 	a searchListingsItems entry — both share the summaries/issues/offers shape)."""
 	summaries = item.get("summaries") or []
 	summary = summaries[0] if summaries else {}
@@ -602,7 +602,7 @@ def _upsert_from_item(
 		quantity = cint(fa[0].get("quantity"))
 
 	values = {
-		"doctype": "Amazon Listing",
+		"doctype": "Amazon Product Listing",
 		"sku": sku,
 		"marketplace": mp.name,
 		"currency": mp.currency,
@@ -629,8 +629,8 @@ def _upsert_from_item(
 	if product:
 		values["product"] = product
 
-	if frappe.db.exists("Amazon Listing", sku):
-		row = frappe.get_doc("Amazon Listing", sku)
+	if frappe.db.exists("Amazon Product Listing", sku):
+		row = frappe.get_doc("Amazon Product Listing", sku)
 		row.update({k: v for k, v in values.items() if k != "doctype"})
 	else:
 		row = frappe.get_doc(values)
@@ -641,6 +641,7 @@ def _upsert_from_item(
 		row.append("suppression_reasons", issue)
 
 	_apply_content(row, mp, item, summary, catalog_content=catalog_content)
+	_apply_variation(row, catalog_content)
 
 	row.flags.ignore_permissions = True
 	row.save(ignore_permissions=True)
@@ -720,6 +721,98 @@ def _apply_content(row, mp, item, summary, catalog_content=None):
 			"images",
 			[{"image_url": im["url"], "is_main": 1 if im["is_main"] else 0} for im in images],
 		)
+
+
+def _listing_for_asin(asin, marketplace=None):
+	"""The register row for an ASIN, if this seller lists it.
+
+	Empty is the normal answer for a variation parent: a parent is not a buyable
+	offer, so most sellers have no SKU of their own for it. The link therefore
+	fills in only once (and if) the parent turns up in the register — a later sync
+	picks it up, which is why this is resolved on every sync rather than once.
+
+	Scoped to the marketplace, because the same ASIN is listed on several of them
+	and a family only means anything within one. Ordered, because nothing stops a
+	seller having two SKUs on one ASIN: without an order the winner would vary
+	between syncs and each sync would write a spurious new version of the row.
+	"""
+	if not asin:
+		return None
+	filters = {"asin": asin}
+	if marketplace:
+		filters["marketplace"] = marketplace
+	return frappe.db.get_value("Amazon Product Listing", filters, "name", order_by="name asc")
+
+
+def _apply_variation(row, catalog_content):
+	"""Record where this SKU sits in its variation family.
+
+	Applied verbatim, clears included — unlike content, parentage is something
+	Amazon answers definitively whenever `relationships` is requested, so "no
+	parent ASIN" means standalone, not unknown, and a listing that has left a
+	family should stop claiming it.
+
+	A missing answer is still not an answer: when the catalog look-up failed or
+	the row has no ASIN to look up, catalog_content is None and nothing changes.
+	"""
+	if catalog_content is None:
+		return
+
+	parent_asin = catalog_content.get("parent_asin") or None
+	row.parent_asin = parent_asin
+	row.parent_listing = _listing_for_asin(parent_asin, marketplace=row.get("marketplace"))
+	row.variation_theme = catalog_content.get("variation_theme") or None
+	row.is_variation_parent = 1 if catalog_content.get("is_variation_parent") else 0
+
+
+def variation_family(parent_asin, marketplace=None):
+	"""Every SKU this seller lists under one parent ASIN.
+
+	The parent→SKU mapping the register could not answer before. Returns the
+	parent's own row when the seller happens to list it, plus the children.
+	"""
+	if not parent_asin:
+		frappe.throw(_("A parent ASIN is required."))
+
+	filters = {"parent_asin": parent_asin}
+	if marketplace:
+		filters["marketplace"] = marketplace
+	children = frappe.get_all(
+		"Amazon Product Listing",
+		filters=filters,
+		fields=[
+			"name as sku",
+			"title",
+			"asin",
+			"listing_status",
+			"price",
+			"quantity",
+			"variation_theme",
+		],
+		order_by="name asc",
+	)
+
+	parent_filters = {"asin": parent_asin}
+	if marketplace:
+		parent_filters["marketplace"] = marketplace
+	parent = frappe.db.get_value(
+		"Amazon Product Listing", parent_filters, ["name", "title", "variation_theme"], as_dict=True
+	)
+
+	# The theme is a property of the family, so any row in it can supply it —
+	# useful because the parent is the row most likely to be missing.
+	theme = (parent or {}).get("variation_theme") or next(
+		(c["variation_theme"] for c in children if c.get("variation_theme")), None
+	)
+
+	return {
+		"parent_asin": parent_asin,
+		"parent_sku": (parent or {}).get("name"),
+		"parent_title": (parent or {}).get("title"),
+		"variation_theme": theme,
+		"children": children,
+		"child_count": len(children),
+	}
 
 
 # --- bulk sync (searchListingsItems) -----------------------------------------

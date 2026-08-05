@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-07-16 00:00:00.000000",
- "description": "A single SP-API listing issue (suppression/incomplete reason). Child of Amazon Listing.",
+ "description": "A single SP-API listing issue (suppression/incomplete reason). Child of Amazon Product Listing.",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",

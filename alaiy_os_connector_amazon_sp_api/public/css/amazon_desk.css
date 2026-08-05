@@ -3,11 +3,11 @@
 /*
  * On a form, the document title is rendered as the last navbar breadcrumb
  * (a.title-text-form). Long Amazon product titles (e.g. footwear) overflow the
- * navbar. Clamp it with an ellipsis — scoped to the Amazon Listing form via its
+ * navbar. Clamp it with an ellipsis — scoped to the Amazon Product Listing form via its
  * breadcrumb href so no other doctype's breadcrumb is affected. The full title
  * remains in the Title field in the form body.
  */
-a.title-text-form[href*="/amazon-listing/"] {
+a.title-text-form[href*="/amazon-product-listing/"] {
 	display: inline-block;
 	max-width: 32vw;
 	overflow: hidden;
@@ -17,7 +17,7 @@ a.title-text-form[href*="/amazon-listing/"] {
 }
 
 @media (max-width: 768px) {
-	a.title-text-form[href*="/amazon-listing/"] {
+	a.title-text-form[href*="/amazon-product-listing/"] {
 		max-width: 55vw;
 	}
 }

@@ -56,11 +56,36 @@ operations. No SP-API calls are ever made from the browser.
 | --- | --- |
 | **Amazon Connection** (single) | Connection settings, region, primary marketplace, and connection status. |
 | **Amazon Marketplace** | Reference list of Amazon marketplaces and their IDs. |
-| **Amazon Listing** | Register of managed listings and their state. |
+| **Amazon Product Listing** | Register of managed listings and their state. |
 | **Amazon Listing Issue** | Issues reported by Amazon against a listing. |
 | **Account Health Metric** | Synced account-health metrics per marketplace. |
 | **Seller Feedback** | Recent seller feedback pulled from Amazon. |
 | **SP-API Log** | Audit log of every SP-API request/response. |
+
+#### Variation families
+
+Each listing records where it sits in its Amazon variation family, read from the
+Catalog Items `relationships` data on every sync:
+
+| Field | Meaning |
+| --- | --- |
+| **Parent ASIN** | The family's parent. Empty on a standalone listing, and on a parent itself. Indexed and available as a standard filter, so filtering on it shows every SKU in one family. |
+| **Parent Listing** | The register row for that parent ASIN, when this seller lists it. Often empty: a parent is not a buyable offer, so many sellers have no SKU for it. |
+| **Variation Theme** | What the family varies by, e.g. `SIZE/COLOR`. |
+| **Is Variation Parent** | This row *is* a family container rather than a buyable offer. Parent rows carry no price or quantity. |
+
+From a parent, the **Variation** connections tab lists its child rows. From any
+row in a family, **Amazon → Variation Family** shows the whole family. The same
+mapping is available programmatically:
+
+```python
+frappe.call("alaiy_os_connector_amazon_sp_api.api.variation_family", parent_asin="B0PARENT001")
+# -> {parent_asin, parent_sku, parent_title, variation_theme, children: [...], child_count}
+```
+
+Parentage is only known for rows that have been through a listing sync — the
+Merchant Listings report carries no parent/child columns, so a
+reconcile-only row has an empty family until **Sync All from Amazon** runs.
 
 Orders deliberately have **no DocType of their own** — they are created as
 ERPNext **Sales Orders** carrying `amazon_order_id`, `amazon_order_status`,
@@ -209,7 +234,7 @@ orders book against that one customer; the buyer stays traceable via
   (**Unmapped SKU Item** on the connection, or an auto-created non-stock
   `Amazon Unmapped Item`), carrying Amazon's own title and the real SKU on the
   row. The sync summary and the Error Log name every SKU that fell back, so you
-  can set the **Product** field on the matching Amazon Listing afterwards.
+  can set the **Product** field on the matching Amazon Product Listing afterwards.
   Already-imported orders are *not* re-pointed automatically. No Item is ever
   auto-created per SKU — that would fill the catalog with stubs that look
   sellable. An order is only refused outright if even the placeholder can't be

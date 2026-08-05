@@ -33,8 +33,8 @@ def _attr(value, marketplace_id=MP.marketplace_id, language="en_IN"):
 
 
 def _listing_row(**values):
-	"""An unsaved Amazon Listing, so _apply_content runs against the real doc API."""
-	return frappe.get_doc({"doctype": "Amazon Listing", "sku": "SKU-1", **values})
+	"""An unsaved Amazon Product Listing, so _apply_content runs against the real doc API."""
+	return frappe.get_doc({"doctype": "Amazon Product Listing", "sku": "SKU-1", **values})
 
 
 class TestCatalogContent(UnitTestCase):

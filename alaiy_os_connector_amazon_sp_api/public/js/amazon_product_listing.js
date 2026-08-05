@@ -1,10 +1,10 @@
 // Copyright (c) 2026, Alaiy and contributors
 // For license information, please see license.txt
 //
-// Amazon Listing form: push updates to Amazon, end the listing, re-sync, and
+// Amazon Product Listing form: push updates to Amazon, end the listing, re-sync, and
 // (for new rows) a catalog-search -> create-offer flow.
 
-frappe.ui.form.on("Amazon Listing", {
+frappe.ui.form.on("Amazon Product Listing", {
 	refresh(frm) {
 		// Snapshot the pushable fields as the baseline for "only send what changed".
 		// Captured only when the form is clean (fresh load / after reload_doc), so a
@@ -63,8 +63,73 @@ frappe.ui.form.on("Amazon Listing", {
 			},
 			__("Amazon")
 		);
+
+		// A parent row reaches its children through the Connections tab
+		// (links -> parent_listing). A *child* has no such route to its siblings,
+		// so give it one. The family ASIN is the parent's on a child row, and the
+		// row's own ASIN when the row *is* the parent.
+		const family_asin = frm.doc.parent_asin || (frm.doc.is_variation_parent ? frm.doc.asin : null);
+		if (family_asin) {
+			frm.add_custom_button(
+				__("Variation Family"),
+				() => amazon_show_family(frm, family_asin),
+				__("Amazon")
+			);
+		}
 	},
 });
+
+function amazon_show_family(frm, parent_asin) {
+	frappe.call({
+		method: "alaiy_os_connector_amazon_sp_api.api.variation_family",
+		args: { parent_asin: parent_asin, marketplace: frm.doc.marketplace },
+		freeze: true,
+		callback: (r) => {
+			const data = r.message || {};
+			const rows = (data.children || [])
+				.map((c) => {
+					const here = c.sku === frm.doc.sku;
+					const link = `/app/amazon-product-listing/${encodeURIComponent(c.sku)}`;
+					return `<tr${here ? ' style="font-weight:600;"' : ""}>
+						<td><a href="${link}">${frappe.utils.escape_html(c.sku)}</a></td>
+						<td>${frappe.utils.escape_html(c.title || "")}</td>
+						<td>${frappe.utils.escape_html(c.asin || "")}</td>
+						<td>${frappe.utils.escape_html(c.listing_status || "")}</td>
+						<td style="text-align:right;">${c.quantity == null ? "" : c.quantity}</td>
+					</tr>`;
+				})
+				.join("");
+
+			// The parent is listed separately because the seller often has no SKU
+			// for it at all — it is not a buyable offer.
+			const parent_line = data.parent_sku
+				? __("Parent SKU: {0}", [frappe.utils.escape_html(data.parent_sku)])
+				: __("This seller has no SKU for the parent ASIN (parents are not buyable).");
+
+			frappe.msgprint({
+				title: __("Variation Family"),
+				indicator: "blue",
+				message: `
+					<p class="text-muted">
+						${__("Parent ASIN")}: <b>${frappe.utils.escape_html(parent_asin)}</b><br>
+						${data.variation_theme ? `${__("Varies by")}: <b>${frappe.utils.escape_html(data.variation_theme)}</b><br>` : ""}
+						${parent_line}
+					</p>
+					${
+						rows
+							? `<table class="table table-bordered" style="margin-bottom:0;">
+									<thead><tr>
+										<th>${__("SKU")}</th><th>${__("Title")}</th><th>${__("ASIN")}</th>
+										<th>${__("Status")}</th><th style="text-align:right;">${__("Qty")}</th>
+									</tr></thead>
+									<tbody>${rows}</tbody>
+								</table>`
+							: `<p>${__("No sibling SKUs in the register yet — run Sync All from Amazon to populate parentage.")}</p>`
+					}`,
+			});
+		},
+	});
+}
 
 // Normalised, comparable view of the fields we can push to Amazon. Child tables
 // are flattened to strings so a simple !== catches adds/edits/removes/reorders.
@@ -189,7 +254,7 @@ function amazon_publish(frm) {
 		freeze: true,
 		freeze_message: __("Publishing offer…"),
 		callback: (r) => {
-			frappe.set_route("Form", "Amazon Listing", r.message.sku);
+			frappe.set_route("Form", "Amazon Product Listing", r.message.sku);
 		},
 	});
 }

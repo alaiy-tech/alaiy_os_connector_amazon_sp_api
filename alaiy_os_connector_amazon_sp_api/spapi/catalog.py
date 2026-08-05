@@ -30,6 +30,7 @@ from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	CATALOG_CONTENT_INCLUDED_DATA,
 	CATALOG_ITEMS_PATH,
 	CATALOG_MAX_IDENTIFIERS,
+	CATALOG_VARIATION_RELATIONSHIP,
 )
 
 # Amazon's image variants, in the order our schema wants them: MAIN becomes the
@@ -97,12 +98,48 @@ def _images_from(item, marketplace_id):
 	return out
 
 
-def content_from_item(item, mp):
-	"""Normalise one catalog item into the content fields of an Amazon Listing.
+def _variation_from(item, marketplace_id):
+	"""The ASIN's place in its variation family.
 
-	Every key may be None/empty — an ASIN can legitimately have no keywords. The
-	caller decides what to do with the gaps; it must not write them over values
-	it already has.
+	An ASIN is a child (it has parentAsins), a parent (it has childAsins), or
+	neither — never both. Amazon states this per marketplace, and the same
+	`relationships` array also carries PACKAGE_HIERARCHY entries, which describe
+	case-packs rather than variations and must not be read as parentage.
+
+	`child_asin_count` counts the family as *Amazon* sees it, which is usually
+	larger than the number of SKUs this seller lists against it.
+	"""
+	empty = {
+		"parent_asin": None,
+		"is_variation_parent": False,
+		"child_asin_count": 0,
+		"variation_theme": None,
+	}
+	block = _pick_for_marketplace(item.get("relationships"), marketplace_id) or {}
+	for rel in block.get("relationships") or []:
+		if (rel.get("type") or "").upper() != CATALOG_VARIATION_RELATIONSHIP:
+			continue
+		parents = [a for a in (rel.get("parentAsins") or []) if a]
+		children = [a for a in (rel.get("childAsins") or []) if a]
+		return {
+			"parent_asin": parents[0] if parents else None,
+			"is_variation_parent": bool(children),
+			"child_asin_count": len(children),
+			"variation_theme": (rel.get("variationTheme") or {}).get("theme") or None,
+		}
+	return empty
+
+
+def content_from_item(item, mp):
+	"""Normalise one catalog item into the fields of an Amazon Product Listing.
+
+	Content keys (title/description/bullets/keywords/images) may each be
+	None/empty — an ASIN can legitimately have no keywords — and the caller must
+	not write those gaps over values it already has.
+
+	The variation keys are different: when `relationships` was requested, Amazon
+	answers definitively, so "no parent" means standalone rather than unknown.
+	listings._apply_variation relies on that distinction.
 	"""
 	marketplace_id = mp.marketplace_id
 	language = mp.get("language")
@@ -125,6 +162,7 @@ def content_from_item(item, mp):
 		"bullets": _attr_values(attributes, "bullet_point", marketplace_id, language),
 		"keywords": _attr_values(attributes, "generic_keyword", marketplace_id, language),
 		"images": images,
+		**_variation_from(item, marketplace_id),
 	}
 
 

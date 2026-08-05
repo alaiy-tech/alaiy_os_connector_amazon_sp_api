@@ -15,6 +15,12 @@
   "marketplace",
   "listing_status",
   "fulfillment_channel",
+  "variation_section",
+  "is_variation_parent",
+  "parent_asin",
+  "column_break_variation",
+  "parent_listing",
+  "variation_theme",
   "offer_section",
   "price",
   "currency",
@@ -88,6 +94,49 @@
    "label": "Fulfillment Channel",
    "options": "DEFAULT\nAMAZON",
    "description": "DEFAULT = merchant-fulfilled (MFN); AMAZON = FBA."
+  },
+  {
+   "fieldname": "variation_section",
+   "fieldtype": "Section Break",
+   "label": "Variation",
+   "description": "Amazon's variation family for this ASIN. Read-only: this connector does not push parentage."
+  },
+  {
+   "default": "0",
+   "fieldname": "is_variation_parent",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "label": "Is Variation Parent",
+   "read_only": 1,
+   "description": "This ASIN is the family container, not a buyable offer. Parent rows have no price or quantity and are the ones that show a bare SKU when Amazon gives them no title."
+  },
+  {
+   "fieldname": "parent_asin",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Parent ASIN",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "The family's parent ASIN. Empty on a standalone listing and on a parent itself. Filter on it to see every SKU in one family."
+  },
+  {
+   "fieldname": "column_break_variation",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "parent_listing",
+   "fieldtype": "Link",
+   "label": "Parent Listing",
+   "options": "Amazon Product Listing",
+   "read_only": 1,
+   "description": "The register row for the parent ASIN, when this seller lists it. Often empty: a variation parent is not buyable, so many sellers have no SKU for it."
+  },
+  {
+   "fieldname": "variation_theme",
+   "fieldtype": "Data",
+   "label": "Variation Theme",
+   "read_only": 1,
+   "description": "What the family varies by, e.g. SIZE/COLOR."
   },
   {
    "fieldname": "offer_section",
@@ -185,11 +234,17 @@
   }
  ],
  "index_web_pages_for_search": 0,
- "links": [],
- "modified": "2026-07-16 00:00:00.000000",
+ "links": [
+  {
+   "group": "Variation",
+   "link_doctype": "Amazon Product Listing",
+   "link_fieldname": "parent_listing"
+  }
+ ],
+ "modified": "2026-08-05 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
- "name": "Amazon Listing",
+ "name": "Amazon Product Listing",
  "naming_rule": "By fieldname",
  "owner": "Administrator",
  "permissions": [

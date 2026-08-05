@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-07-29 00:00:00.000000",
- "description": "A single search keyword (generic_keyword) for an Amazon Listing.",
+ "description": "A single search keyword (generic_keyword) for an Amazon Product Listing.",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",

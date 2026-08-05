@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-07-29 00:00:00.000000",
- "description": "A single product image URL for an Amazon Listing. One row may be flagged as the main image.",
+ "description": "A single product image URL for an Amazon Product Listing. One row may be flagged as the main image.",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
