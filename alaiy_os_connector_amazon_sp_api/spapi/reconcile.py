@@ -86,8 +86,8 @@ def _apply_report(mp, text):
 			"fulfillment_channel": _fulfillment(row.get("fulfillment-channel")),
 		}
 
-		if frappe.db.exists("Amazon Listing", sku):
-			doc = frappe.get_doc("Amazon Listing", sku)
+		if frappe.db.exists("Amazon Product Listing", sku):
+			doc = frappe.get_doc("Amazon Product Listing", sku)
 			# Don't overwrite an in-flight push that Amazon hasn't confirmed yet.
 			if doc.listing_status == "pending":
 				skipped_pending += 1
@@ -100,7 +100,7 @@ def _apply_report(mp, text):
 			updated += 1
 		else:
 			doc = frappe.get_doc(
-				{"doctype": "Amazon Listing", "sku": sku, "marketplace": mp.name, "currency": mp.currency}
+				{"doctype": "Amazon Product Listing", "sku": sku, "marketplace": mp.name, "currency": mp.currency}
 			)
 			_assign(doc, fields, is_new=True)
 			_seed_content(doc, row)

@@ -5,8 +5,8 @@
 Create publishes an offer against an existing catalog ASIN
 (requirements=LISTING_OFFER_ONLY). Update prefers a JSON-Patch PATCH and falls
 back to a full PUT when an attribute can't be patched. Delete ends the listing.
-After every write we re-fetch the item and upsert the Amazon Listing row so the
-register reflects Amazon's actual state.
+After every write we re-fetch the item and upsert the Amazon Product Listing row
+so the register reflects Amazon's actual state.
 
 Attribute shapes (purchasable_offer, fulfillment_availability, ...) follow the
 common product-type schema; they may need per-marketplace/product-type tuning
@@ -308,7 +308,7 @@ def create_listing(
 
 
 # --- update ------------------------------------------------------------------
-# Amazon Listing fieldnames we allow through to the Listings Items attributes.
+# Amazon Product Listing fieldnames we allow through to the Listings Items attributes.
 _PATCHABLE = {
 	"title",
 	"price",
@@ -363,11 +363,11 @@ def update_listing(sku, changes, marketplace=None):
 
 def _apply_submitted_changes(sku, mp, changes, issues):
 	"""Write the operator's accepted changes to the register row (status pending)."""
-	if not frappe.db.exists("Amazon Listing", sku):
+	if not frappe.db.exists("Amazon Product Listing", sku):
 		# No local row yet (e.g. updating a SKU synced elsewhere) — fall back to a
 		# fetch so the register has something to show.
 		return sync_listing(sku, marketplace=mp.name)
-	row = frappe.get_doc("Amazon Listing", sku)
+	row = frappe.get_doc("Amazon Product Listing", sku)
 	for field in ("title", "price", "quantity", "condition", "description"):
 		if field in changes and changes[field] is not None:
 			row.set(field, changes[field])
@@ -436,7 +436,7 @@ def _build_patches(mp, changes):
 
 def _put_fallback(client, conn, mp, sku, changes):
 	"""Rebuild a full PUT from the stored row merged with the requested changes."""
-	row = frappe.get_doc("Amazon Listing", sku)
+	row = frappe.get_doc("Amazon Product Listing", sku)
 	product_type = _stored_product_type(sku)
 	if not product_type:
 		frappe.throw(_("Cannot fall back to PUT: no product type stored for {0}.").format(sku))
@@ -480,7 +480,7 @@ def _row_images(row):
 
 def _stored_product_type(sku):
 	"""Best-effort product type from the stored raw summary."""
-	raw = frappe.db.get_value("Amazon Listing", sku, "raw_summary")
+	raw = frappe.db.get_value("Amazon Product Listing", sku, "raw_summary")
 	if raw:
 		try:
 			return (json.loads(raw) or {}).get("productType")
@@ -505,8 +505,8 @@ def delete_listing(sku, marketplace=None):
 	issues = _issues_from(resp)
 	_raise_on_error_issues(issues, _("deletion"))
 
-	if frappe.db.exists("Amazon Listing", sku):
-		row = frappe.get_doc("Amazon Listing", sku)
+	if frappe.db.exists("Amazon Product Listing", sku):
+		row = frappe.get_doc("Amazon Product Listing", sku)
 		row.listing_status = "inactive"
 		row.last_synced_at = now_datetime()
 		row.save(ignore_permissions=True)
@@ -559,11 +559,11 @@ def _item_asin(sku, item):
 	asin = (summaries[0] if summaries else {}).get("asin")
 	if asin:
 		return asin
-	return frappe.db.get_value("Amazon Listing", sku, "asin")
+	return frappe.db.get_value("Amazon Product Listing", sku, "asin")
 
 
 def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, product_type=None):
-	"""Fetch one item from Amazon and upsert the Amazon Listing register row."""
+	"""Fetch one item from Amazon and upsert the Amazon Product Listing register row."""
 	mp = _marketplace(marketplace)
 	item = get_listing_item(sku, marketplace=mp.name)
 	# Content comes from the ASIN's catalog entry, not from our own listing
@@ -584,7 +584,7 @@ def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, 
 def _upsert_from_item(
 	sku, mp, item, product=None, fulfillment_channel=None, product_type=None, catalog_content=None
 ):
-	"""Upsert an Amazon Listing row from a Listings-Items payload (single GET or
+	"""Upsert an Amazon Product Listing row from a Listings-Items payload (single GET or
 	a searchListingsItems entry — both share the summaries/issues/offers shape)."""
 	summaries = item.get("summaries") or []
 	summary = summaries[0] if summaries else {}
@@ -602,7 +602,7 @@ def _upsert_from_item(
 		quantity = cint(fa[0].get("quantity"))
 
 	values = {
-		"doctype": "Amazon Listing",
+		"doctype": "Amazon Product Listing",
 		"sku": sku,
 		"marketplace": mp.name,
 		"currency": mp.currency,
@@ -629,8 +629,8 @@ def _upsert_from_item(
 	if product:
 		values["product"] = product
 
-	if frappe.db.exists("Amazon Listing", sku):
-		row = frappe.get_doc("Amazon Listing", sku)
+	if frappe.db.exists("Amazon Product Listing", sku):
+		row = frappe.get_doc("Amazon Product Listing", sku)
 		row.update({k: v for k, v in values.items() if k != "doctype"})
 	else:
 		row = frappe.get_doc(values)

@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-07-29 00:00:00.000000",
- "description": "A single bullet point (key product feature) for an Amazon Listing. Amazon allows up to 5.",
+ "description": "A single bullet point (key product feature) for an Amazon Product Listing. Amazon allows up to 5.",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",

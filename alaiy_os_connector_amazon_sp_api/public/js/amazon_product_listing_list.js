@@ -1,10 +1,10 @@
 // Copyright (c) 2026, Alaiy and contributors
 // For license information, please see license.txt
 //
-// Amazon Listing list view: colour the status, expose quick filters for
+// Amazon Product Listing list view: colour the status, expose quick filters for
 // Active / Inactive / Suppressed, and a "Sync All from Amazon" button.
 
-frappe.listview_settings["Amazon Listing"] = {
+frappe.listview_settings["Amazon Product Listing"] = {
 	add_fields: ["listing_status"],
 
 	get_indicator(doc) {

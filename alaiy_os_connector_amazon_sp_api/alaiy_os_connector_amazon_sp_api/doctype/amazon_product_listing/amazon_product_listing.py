@@ -4,5 +4,5 @@
 from frappe.model.document import Document
 
 
-class AmazonListing(Document):
+class AmazonProductListing(Document):
 	pass

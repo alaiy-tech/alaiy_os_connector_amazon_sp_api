@@ -178,7 +178,7 @@ def create_listing(
 	fulfillment_channel="DEFAULT",
 	product=None,
 ):
-	"""Publish an offer for an existing ASIN and upsert the Amazon Listing row."""
+	"""Publish an offer for an existing ASIN and upsert the Amazon Product Listing row."""
 	_require_manager()
 	return listings.create_listing(
 		sku,

@@ -36,7 +36,7 @@ after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 # fallback is Amazon Connection, and a Connection row would just duplicate it.
 alaiy_os_sidebar_connector_items = [
 	{"connector_id": "amazon_sp_api", "link_type": "DocType",
-	 "link_to": "Amazon Listing", "label": "Listings", "icon": "list"},
+	 "link_to": "Amazon Product Listing", "label": "Listings", "icon": "list"},
 	# No "Orders" row: orders are plain Sales Orders, and core's
 	# _connector_extra_sidebar_items only forwards link_type/link_to/label/icon
 	# — it drops `filters`/`route_options` — so the link could only ever open
@@ -65,16 +65,16 @@ alaiy_os_sidebar_log_items = [
 # -------------------
 doctype_js = {
 	"Amazon Connection": "public/js/amazon_connection.js",
-	"Amazon Listing": "public/js/amazon_listing.js",
+	"Amazon Product Listing": "public/js/amazon_product_listing.js",
 }
 doctype_list_js = {
-	"Amazon Listing": "public/js/amazon_listing_list.js",
+	"Amazon Product Listing": "public/js/amazon_product_listing_list.js",
 	# Orders land as plain Sales Orders, so the sync controls belong on that
 	# list rather than on a DocType of our own.
 	"Sales Order": "public/js/amazon_sales_order_list.js",
 }
 
-# Desk styles (breadcrumb title clamp for the Amazon Listing form)
+# Desk styles (breadcrumb title clamp for the Amazon Product Listing form)
 app_include_css = "/assets/alaiy_os_connector_amazon_sp_api/css/amazon_desk.css"
 
 # Website routes (clean, hyphenated OAuth URLs -> www page controllers)

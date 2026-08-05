@@ -1,10 +1,10 @@
 // Copyright (c) 2026, Alaiy and contributors
 // For license information, please see license.txt
 //
-// Amazon Listing form: push updates to Amazon, end the listing, re-sync, and
+// Amazon Product Listing form: push updates to Amazon, end the listing, re-sync, and
 // (for new rows) a catalog-search -> create-offer flow.
 
-frappe.ui.form.on("Amazon Listing", {
+frappe.ui.form.on("Amazon Product Listing", {
 	refresh(frm) {
 		// Snapshot the pushable fields as the baseline for "only send what changed".
 		// Captured only when the form is clean (fresh load / after reload_doc), so a
@@ -189,7 +189,7 @@ function amazon_publish(frm) {
 		freeze: true,
 		freeze_message: __("Publishing offer…"),
 		callback: (r) => {
-			frappe.set_route("Form", "Amazon Listing", r.message.sku);
+			frappe.set_route("Form", "Amazon Product Listing", r.message.sku);
 		},
 	});
 }

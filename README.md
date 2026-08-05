@@ -56,7 +56,7 @@ operations. No SP-API calls are ever made from the browser.
 | --- | --- |
 | **Amazon Connection** (single) | Connection settings, region, primary marketplace, and connection status. |
 | **Amazon Marketplace** | Reference list of Amazon marketplaces and their IDs. |
-| **Amazon Listing** | Register of managed listings and their state. |
+| **Amazon Product Listing** | Register of managed listings and their state. |
 | **Amazon Listing Issue** | Issues reported by Amazon against a listing. |
 | **Account Health Metric** | Synced account-health metrics per marketplace. |
 | **Seller Feedback** | Recent seller feedback pulled from Amazon. |
@@ -209,7 +209,7 @@ orders book against that one customer; the buyer stays traceable via
   (**Unmapped SKU Item** on the connection, or an auto-created non-stock
   `Amazon Unmapped Item`), carrying Amazon's own title and the real SKU on the
   row. The sync summary and the Error Log name every SKU that fell back, so you
-  can set the **Product** field on the matching Amazon Listing afterwards.
+  can set the **Product** field on the matching Amazon Product Listing afterwards.
   Already-imported orders are *not* re-pointed automatically. No Item is ever
   auto-created per SKU — that would fill the catalog with stubs that look
   sellable. An order is only refused outright if even the placeholder can't be

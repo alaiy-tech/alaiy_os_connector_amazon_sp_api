@@ -194,7 +194,7 @@ def fetch_order_items(client, amazon_order_id):
 
 # --- item resolution ---------------------------------------------------------
 def _resolve_item_code(seller_sku):
-	"""SellerSKU -> Item code, via the Amazon Listing register.
+	"""SellerSKU -> Item code, via the Amazon Product Listing register.
 
 	Never creates an Item *per SKU*: a mis-resolved SKU silently books revenue
 	against the wrong product, and a stub per unknown SKU fills the catalog with
@@ -203,7 +203,7 @@ def _resolve_item_code(seller_sku):
 	"""
 	if not seller_sku:
 		return None
-	product = frappe.db.get_value("Amazon Listing", seller_sku, "product")
+	product = frappe.db.get_value("Amazon Product Listing", seller_sku, "product")
 	if product:
 		return product
 	# A SKU that happens to be the item code itself is the common convention
@@ -511,7 +511,7 @@ def _report_unmapped(unmapped_skus):
 			"These orders imported successfully — this is a catalog gap, not a failure.\n\n"
 			"No Item is linked to:\n"
 			+ "\n".join(f"  {sku}" for sku in sorted(unmapped_skus))
-			+ "\n\nSet the Product field on each matching Amazon Listing so future orders "
+			+ "\n\nSet the Product field on each matching Amazon Product Listing so future orders "
 			"map correctly. Orders already imported are not re-pointed automatically."
 		),
 	)

@@ -98,7 +98,7 @@ def _images_from(item, marketplace_id):
 
 
 def content_from_item(item, mp):
-	"""Normalise one catalog item into the content fields of an Amazon Listing.
+	"""Normalise one catalog item into the content fields of an Amazon Product Listing.
 
 	Every key may be None/empty — an ASIN can legitimately have no keywords. The
 	caller decides what to do with the gaps; it must not write them over values
