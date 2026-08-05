@@ -8,11 +8,14 @@ GET_MERCHANT_LISTINGS_ALL_DATA report returns *every* SKU as a TSV with no such
 cap; we use it to reconcile offer/status fields (status, price, quantity, asin,
 fulfillment channel).
 
-We deliberately do NOT touch rich content here (description / bullet points /
-keywords / images): the report does not carry them, and clobbering them would
-wipe operator edits. Rows currently in `pending` state (a just-pushed change
-Amazon has not confirmed yet) are skipped so reconciliation never fights an
-in-flight update.
+The report carries `item-name`, `item-description` and `image-url`, so it can
+seed those three catalog-wide for free — but only into rows that don't have them
+yet. Once a row has content it is either Amazon's (via spapi.catalog) or the
+operator's, and neither should lose to a report column. Bullet points and
+keywords have no columns at all here; those come from spapi.catalog.
+
+Rows currently in `pending` state (a just-pushed change Amazon has not confirmed
+yet) are skipped so reconciliation never fights an in-flight update.
 """
 
 import csv
@@ -90,6 +93,7 @@ def _apply_report(mp, text):
 				skipped_pending += 1
 				continue
 			_assign(doc, fields, is_new=False)
+			_seed_content(doc, row)
 			doc.last_synced_at = now_datetime()
 			doc.flags.ignore_permissions = True
 			doc.save(ignore_permissions=True)
@@ -99,9 +103,7 @@ def _apply_report(mp, text):
 				{"doctype": "Amazon Listing", "sku": sku, "marketplace": mp.name, "currency": mp.currency}
 			)
 			_assign(doc, fields, is_new=True)
-			# Title is a seed-only value: set it when first discovering a SKU, but never
-			# clobber an existing (possibly operator-edited) title on later reconciles.
-			doc.title = row.get("item-name") or None
+			_seed_content(doc, row)
 			doc.last_synced_at = now_datetime()
 			doc.flags.ignore_permissions = True
 			doc.insert(ignore_permissions=True)
@@ -121,6 +123,27 @@ def _apply_report(mp, text):
 	}
 
 
+def _seed_content(doc, row):
+	"""Fill title / description / main image from the report, gaps only.
+
+	Fill-only in both directions: it seeds a newly discovered SKU, and it repairs
+	a row that reached us through a path with no content (an offer-only listing,
+	or a variation parent whose Listings summary carries no itemName — those are
+	the rows that end up displaying their SKU because `title` is NULL and
+	title_field falls back to `name`). It never overwrites content that is already
+	there, which is what keeps operator edits and richer spapi.catalog content
+	safe from a thinner report column.
+	"""
+	# doc.get(), not doc.title: on the insert path the field was never assigned,
+	# and BaseDocument has no __getattr__ — a bare attribute read raises.
+	if not doc.get("title") and row.get("item-name"):
+		doc.title = row["item-name"]
+	if not doc.get("description") and row.get("item-description"):
+		doc.description = row["item-description"]
+	if not doc.get("images") and row.get("image-url"):
+		doc.set("images", [{"image_url": row["image-url"], "is_main": 1}])
+
+
 def _assign(doc, fields, *, is_new):
 	"""Set offer/status fields, leaving unknowns (None) untouched on existing rows."""
 	for key, value in fields.items():
@@ -137,10 +160,19 @@ def _fulfillment(raw):
 
 
 def _parse_rows(text):
-	"""Tab-separated report with a header row -> list of {column: value} dicts."""
+	"""Tab-separated report with a header row -> list of {column: value} dicts.
+
+	QUOTE_NONE is not optional here. Amazon's report TSVs are not quoted, but
+	`item-name` and `item-description` are seller free text — and when one of them
+	*begins* with a double quote (a quoted phrase, an inch measurement) csv's
+	default quotechar reads it as an opening quote and consumes tabs and newlines
+	until it finds a closing one. An unbalanced quote therefore eats the rest of
+	the row and however many rows follow, which surfaces as scrambled titles and
+	statuses, or as SKUs that silently never reconcile at all.
+	"""
 	if not text:
 		return []
-	reader = csv.DictReader(io.StringIO(text), delimiter="\t")
+	reader = csv.DictReader(io.StringIO(text), delimiter="\t", quoting=csv.QUOTE_NONE)
 	rows = []
 	for raw in reader:
 		rows.append({(k or "").strip(): (v or "").strip() for k, v in raw.items() if k})
