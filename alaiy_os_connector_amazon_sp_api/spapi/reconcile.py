@@ -8,14 +8,23 @@ GET_MERCHANT_LISTINGS_ALL_DATA report returns *every* SKU as a TSV with no such
 cap; we use it to reconcile offer/status fields (status, price, quantity, asin,
 fulfillment channel).
 
-The report carries `item-name`, `item-description` and `image-url`, so it can
-seed those three catalog-wide for free — but only into rows that don't have them
-yet. Once a row has content it is either Amazon's (via spapi.catalog) or the
-operator's, and neither should lose to a report column. Bullet points and
-keywords have no columns at all here; those come from spapi.catalog.
+Content and variation parentage are *also* this module's job, and that is not
+obvious. They come from the Catalog Items API, which the report cannot supply —
+and the Listings-API sync that does fetch them (listings.sync_all_listings) stops
+at its ~1000-SKU cap. So for any catalog bigger than that, this is the only path
+that ever fills title, description, bullets, keywords, images and parentage. It
+used to fill none of them, which left every row past the cap showing its SKU
+instead of a title and an empty variation family.
 
-Rows currently in `pending` state (a just-pushed change Amazon has not confirmed
-yet) are skipped so reconciliation never fights an in-flight update.
+Enrichment happens once per row, not once per run: `catalog_synced_at` marks a
+row as done, so a steady-state reconcile makes no catalog calls at all.
+RECONCILE_CATALOG_BUDGET bounds the first run over a large catalog, and what it
+defers is reported and picked up next run rather than silently dropped.
+
+The report's own `item-name`, `item-description` and `image-url` remain a
+fallback, filling only the gaps the catalog left. Rows currently in `pending`
+state (a just-pushed change Amazon has not confirmed yet) are skipped so
+reconciliation never fights an in-flight update.
 """
 
 import csv
@@ -25,10 +34,17 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
-from alaiy_os_connector_amazon_sp_api.spapi import reports
+from alaiy_os_connector_amazon_sp_api.spapi import catalog, reports
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient
-from alaiy_os_connector_amazon_sp_api.spapi.constants import REPORT_MERCHANT_LISTINGS_ALL
-from alaiy_os_connector_amazon_sp_api.spapi.listings import _marketplace
+from alaiy_os_connector_amazon_sp_api.spapi.constants import (
+	RECONCILE_CATALOG_BUDGET,
+	REPORT_MERCHANT_LISTINGS_ALL,
+)
+from alaiy_os_connector_amazon_sp_api.spapi.listings import (
+	_apply_content,
+	_apply_variation,
+	_marketplace,
+)
 
 # The report's `status` column -> our listing_status. The report does not expose
 # suppression (no issues), so non-active rows land as inactive.
@@ -52,7 +68,7 @@ def reconcile_all_listings(marketplace=None, notify_user=None):
 		text = reports.fetch_report(
 			REPORT_MERCHANT_LISTINGS_ALL, [mp.marketplace_id], client=client, context="reconcile"
 		)
-		summary = _apply_report(mp, text)
+		summary = _apply_report(mp, text, client=client)
 		summary.update({"success": True, "marketplace": mp.name})
 	except Exception as e:
 		frappe.db.rollback()
@@ -64,17 +80,65 @@ def reconcile_all_listings(marketplace=None, notify_user=None):
 	return summary
 
 
-def _apply_report(mp, text):
-	"""Parse the report TSV and upsert each SKU's offer/status fields."""
-	rows = _parse_rows(text)
+def _needs_enrichment(mp, rows):
+	"""The report rows whose SKU has never had catalog content applied.
+
+	Asked as one query rather than per row: a reconcile can walk tens of thousands
+	of rows, and this decides whether each one costs an API call.
+	"""
+	done = set(
+		frappe.get_all(
+			"Amazon Product Listing",
+			filters={"marketplace": mp.name, "catalog_synced_at": ["is", "set"]},
+			pluck="name",
+		)
+	)
+	return [r for r in rows if r.get("asin1") and r["seller-sku"] not in done]
+
+
+def _enrich_from_catalog(mp, rows, client):
+	"""{asin: content} for the rows that still need it, within the run's budget.
+
+	Returns the map plus counts, because "we did not enrich these" has to end up
+	in the run summary. A deferred row is normal (budget) and a missing one is not
+	(Amazon returned nothing for the ASIN, or the batch errored inside
+	catalog.fetch_content) — conflating them would hide a real failure behind a
+	number that looks like throttling.
+	"""
+	stats = {"enriched": 0, "enrich_deferred": 0, "enrich_missing": 0}
+	if not client:
+		return {}, stats
+
+	pending = _needs_enrichment(mp, rows)
+	budgeted = pending[:RECONCILE_CATALOG_BUDGET]
+	stats["enrich_deferred"] = len(pending) - len(budgeted)
+	if not budgeted:
+		return {}, stats
+
+	asins = list(dict.fromkeys(r["asin1"] for r in budgeted))
+	content = catalog.fetch_content(asins, mp, client=client)
+	stats["enriched"] = len(content)
+	stats["enrich_missing"] = len(asins) - len(content)
+	return content, stats
+
+
+def _apply_report(mp, text, client=None):
+	"""Parse the report TSV and upsert each SKU's offer/status fields.
+
+	Content and parentage ride along for rows that have never had them — see the
+	module docstring for why that belongs here rather than only in the
+	Listings-API sync.
+	"""
+	rows = [r for r in _parse_rows(text) if r.get("seller-sku")]
+	content_by_asin, stats = _enrich_from_catalog(mp, rows, client)
+
 	seen = created = updated = skipped_pending = 0
 	by_status = {}
 
 	for row in rows:
-		sku = row.get("seller-sku")
-		if not sku:
-			continue
+		sku = row["seller-sku"]
 		seen += 1
+		catalog_content = content_by_asin.get(row.get("asin1")) if row.get("asin1") else None
 
 		status = _REPORT_STATUS.get((row.get("status") or "").strip().lower(), "inactive")
 		# Offer/status fields — reconciled on every row (Amazon is the source of truth).
@@ -93,6 +157,7 @@ def _apply_report(mp, text):
 				skipped_pending += 1
 				continue
 			_assign(doc, fields, is_new=False)
+			_apply_catalog(doc, mp, catalog_content)
 			_seed_content(doc, row)
 			doc.last_synced_at = now_datetime()
 			doc.flags.ignore_permissions = True
@@ -103,6 +168,7 @@ def _apply_report(mp, text):
 				{"doctype": "Amazon Product Listing", "sku": sku, "marketplace": mp.name, "currency": mp.currency}
 			)
 			_assign(doc, fields, is_new=True)
+			_apply_catalog(doc, mp, catalog_content)
 			_seed_content(doc, row)
 			doc.last_synced_at = now_datetime()
 			doc.flags.ignore_permissions = True
@@ -114,13 +180,44 @@ def _apply_report(mp, text):
 			frappe.db.commit()
 
 	frappe.db.commit()
+	if stats["enrich_deferred"]:
+		# A capped run must say so: "reconciled 40,000" reads as full coverage
+		# otherwise, and the missing titles would look like a bug rather than a
+		# queue.
+		frappe.logger("amazon_seller").info(
+			f"Reconcile enriched {stats['enriched']} SKUs from the catalog; "
+			f"{stats['enrich_deferred']} deferred to the next run "
+			f"(budget {RECONCILE_CATALOG_BUDGET})."
+		)
 	return {
 		"seen": seen,
 		"created": created,
 		"updated": updated,
 		"skipped_pending": skipped_pending,
 		"by_status": by_status,
+		**stats,
 	}
+
+
+def _apply_catalog(doc, mp, catalog_content):
+	"""Apply catalog content + parentage, reusing the Listings-sync precedence.
+
+	Passed an empty Listings payload on purpose: there is none here, so
+	_apply_content falls straight through to the catalog values and _apply_variation
+	sees a definitive answer. Called *before* _seed_content so the catalog wins and
+	the report's thinner columns only fill what it left — that ordering is what
+	stops a variation parent keeping the SKU-ish string the report calls its
+	`item-name`.
+
+	`catalog_synced_at` is stamped only when an answer actually arrived, so a row
+	Amazon returned nothing for is retried on the next run instead of being marked
+	done.
+	"""
+	if catalog_content is None:
+		return
+	_apply_content(doc, mp, {}, {}, catalog_content=catalog_content)
+	_apply_variation(doc, catalog_content)
+	doc.catalog_synced_at = now_datetime()
 
 
 def _seed_content(doc, row):

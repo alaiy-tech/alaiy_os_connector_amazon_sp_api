@@ -76,6 +76,17 @@ frappe.listview_settings["Amazon Product Listing"] = {
 						},
 						10
 					);
+					// A capped enrichment pass has to announce itself: otherwise the
+					// rows still showing a SKU instead of a title look like a bug
+					// rather than a queue that the next run drains.
+					if (data.enrich_deferred) {
+						frappe.msgprint(
+							__(
+								"Filled titles, descriptions and variation parentage for {0} SKUs from the catalog. {1} more are queued — they are picked up by the next reconcile, or run this again to continue.",
+								[data.enriched || 0, data.enrich_deferred]
+							)
+						);
+					}
 					listview.refresh();
 				} else {
 					frappe.show_alert(

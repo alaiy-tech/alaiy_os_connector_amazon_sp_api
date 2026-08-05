@@ -50,6 +50,14 @@ CATALOG_CONTENT_INCLUDED_DATA = "summaries,attributes,images,relationships"
 # carries PACKAGE_HIERARCHY, which is a different thing entirely.
 CATALOG_VARIATION_RELATIONSHIP = "VARIATION"
 
+# How many SKUs one reconcile run will enrich from the catalog. Content and
+# parentage are fetched once per row (see Amazon Product Listing.catalog_synced_at)
+# rather than on every run, so a steady-state reconcile spends nothing here — the
+# cap exists to keep the *first* run over a large catalog inside the job timeout.
+# At CATALOG_MAX_IDENTIFIERS per request this is 100 requests, and whatever it
+# defers is picked up by the next run.
+RECONCILE_CATALOG_BUDGET = 2000
+
 # Locale for human-readable issue messages returned by the Listings API.
 DEFAULT_ISSUE_LOCALE = "en_US"
 

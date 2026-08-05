@@ -362,3 +362,60 @@ class TestReportContentSeeding(UnitTestCase):
 		reconcile._seed_content(row, {})
 		self.assertEqual(row.title, "Kept")
 		self.assertFalse(row.get("images"))
+
+
+class TestReconcileCatalogEnrichment(UnitTestCase):
+	"""The report-driven reconcile is the only path that reaches a catalog past the
+	Listings API's ~1000-SKU cap, so it is where content and parentage have to be
+	filled. It used to fill neither, which is what left every row beyond the cap
+	showing its SKU instead of a title.
+	"""
+
+	CATALOG = {
+		"title": "Real Product Title",
+		"description": "Real description",
+		"bullets": ["Breathable"],
+		"keywords": ["shirt"],
+		"images": [{"url": "real.jpg", "is_main": True}],
+		"parent_asin": "B0PARENT001",
+		"variation_theme": "SIZE",
+		"is_variation_parent": False,
+	}
+	# A variation parent's report row: `item-name` is the SKU-ish string, which is
+	# exactly the value that must not win.
+	REPORT_ROW = {
+		"item-name": "PARENT-12345",
+		"item-description": "thin report description",
+		"image-url": "report.jpg",
+	}
+
+	def test_catalog_content_beats_the_report_columns(self):
+		row = _listing_row()
+		reconcile._apply_catalog(row, MP, self.CATALOG)
+		reconcile._seed_content(row, self.REPORT_ROW)
+		self.assertEqual(row.title, "Real Product Title")
+		self.assertEqual(row.description, "Real description")
+		self.assertEqual([i.image_url for i in row.images], ["real.jpg"])
+		self.assertEqual([b.bullet for b in row.bullet_points], ["Breathable"])
+		self.assertEqual([k.keyword for k in row.keywords], ["shirt"])
+
+	def test_parentage_lands_on_the_reconcile_path(self):
+		row = _listing_row()
+		reconcile._apply_catalog(row, MP, self.CATALOG)
+		self.assertEqual(row.parent_asin, "B0PARENT001")
+		self.assertEqual(row.variation_theme, "SIZE")
+
+	def test_an_enriched_row_is_marked_done(self):
+		row = _listing_row()
+		reconcile._apply_catalog(row, MP, self.CATALOG)
+		self.assertTrue(row.catalog_synced_at)
+
+	def test_no_catalog_answer_falls_back_to_the_report_and_retries_later(self):
+		# Not marked done, so the next run tries this SKU again rather than
+		# leaving it permanently untitled.
+		row = _listing_row()
+		reconcile._apply_catalog(row, MP, None)
+		reconcile._seed_content(row, self.REPORT_ROW)
+		self.assertEqual(row.title, "PARENT-12345")
+		self.assertIsNone(row.get("catalog_synced_at"))
+		self.assertIsNone(row.get("parent_asin"))

@@ -36,6 +36,7 @@
   "suppression_reasons",
   "sync_section",
   "last_synced_at",
+  "catalog_synced_at",
   "raw_summary"
  ],
  "fields": [
@@ -224,6 +225,13 @@
    "fieldtype": "Datetime",
    "label": "Last Synced At",
    "read_only": 1
+  },
+  {
+   "fieldname": "catalog_synced_at",
+   "fieldtype": "Datetime",
+   "label": "Catalog Synced At",
+   "read_only": 1,
+   "description": "When content and variation parentage were last taken from the Catalog Items API. Empty means this row has never been enriched -- the report-driven reconcile skips rows that already have it, so this is what stops it re-fetching the whole catalog on every run."
   },
   {
    "fieldname": "raw_summary",
