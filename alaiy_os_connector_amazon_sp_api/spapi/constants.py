@@ -36,6 +36,20 @@ REGION_CONSENT_HOSTS = {
 CATALOG_ITEMS_PATH = "/catalog/2022-04-01/items"
 LISTINGS_ITEMS_BASE = "/listings/2021-08-01/items"
 
+# searchCatalogItems accepts at most 20 values in `identifiers`, which is what
+# lets spapi.catalog fetch content for a whole page of listings in one call.
+CATALOG_MAX_IDENTIFIERS = 20
+
+# What spapi.catalog needs to reconstruct a listing's content: attributes carry
+# product_description / bullet_point / generic_keyword, images carry the variant
+# set, summaries carry itemName as a fallback title, relationships carry the
+# variation family (parent/child ASINs + theme).
+CATALOG_CONTENT_INCLUDED_DATA = "summaries,attributes,images,relationships"
+
+# The relationship type that describes a variation family. The same array also
+# carries PACKAGE_HIERARCHY, which is a different thing entirely.
+CATALOG_VARIATION_RELATIONSHIP = "VARIATION"
+
 # Locale for human-readable issue messages returned by the Listings API.
 DEFAULT_ISSUE_LOCALE = "en_US"
 

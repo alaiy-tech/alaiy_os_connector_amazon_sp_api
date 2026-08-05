@@ -10,7 +10,7 @@ empty on every order imported before it, no matter how many times you backfill.
 
 Nothing here calls Amazon. Both sources are already on the site:
 
-  1. `Amazon Listing` is named by SKU and carries the ASIN, so any line whose
+  1. `Amazon Product Listing` is named by SKU and carries the ASIN, so any line whose
      SellerSKU is in the register can be filled directly.
   2. Placeholder lines for unmapped SKUs aren't in that register, but the
      connector wrote "... | ASIN: B0XXXXXXXX" into their description itself, so
@@ -60,19 +60,19 @@ def execute():
 		"Sales Order Item", {"amazon_seller_sku": ["is", "set"], "amazon_asin": ["is", "not set"]}
 	)
 	print(
-		f"Amazon order provenance: {filled_from_register} ASIN(s) from Amazon Listing, "
+		f"Amazon order provenance: {filled_from_register} ASIN(s) from Amazon Product Listing, "
 		f"{filled_from_text} from line descriptions, {channels} sales channel(s). "
 		f"{remaining} line(s) still without an ASIN."
 	)
 
 
 def _fill_asin_from_listing_register():
-	"""Authoritative source: the SKU's own Amazon Listing row."""
+	"""Authoritative source: the SKU's own Amazon Product Listing row."""
 	rows = frappe.db.sql(
 		"""
 		SELECT soi.name, al.asin
 		FROM `tabSales Order Item` soi
-		JOIN `tabAmazon Listing` al ON al.name = soi.amazon_seller_sku
+		JOIN `tabAmazon Product Listing` al ON al.name = soi.amazon_seller_sku
 		WHERE COALESCE(soi.amazon_asin, '') = ''
 		  AND COALESCE(al.asin, '') != ''
 		""",

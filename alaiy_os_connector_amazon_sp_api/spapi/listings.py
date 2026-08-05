@@ -5,8 +5,8 @@
 Create publishes an offer against an existing catalog ASIN
 (requirements=LISTING_OFFER_ONLY). Update prefers a JSON-Patch PATCH and falls
 back to a full PUT when an attribute can't be patched. Delete ends the listing.
-After every write we re-fetch the item and upsert the Amazon Listing row so the
-register reflects Amazon's actual state.
+After every write we re-fetch the item and upsert the Amazon Product Listing row
+so the register reflects Amazon's actual state.
 
 Attribute shapes (purchasable_offer, fulfillment_availability, ...) follow the
 common product-type schema; they may need per-marketplace/product-type tuning
@@ -20,6 +20,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
+from alaiy_os_connector_amazon_sp_api.spapi import catalog
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	CATALOG_ITEMS_PATH,
@@ -307,7 +308,7 @@ def create_listing(
 
 
 # --- update ------------------------------------------------------------------
-# Amazon Listing fieldnames we allow through to the Listings Items attributes.
+# Amazon Product Listing fieldnames we allow through to the Listings Items attributes.
 _PATCHABLE = {
 	"title",
 	"price",
@@ -362,11 +363,11 @@ def update_listing(sku, changes, marketplace=None):
 
 def _apply_submitted_changes(sku, mp, changes, issues):
 	"""Write the operator's accepted changes to the register row (status pending)."""
-	if not frappe.db.exists("Amazon Listing", sku):
+	if not frappe.db.exists("Amazon Product Listing", sku):
 		# No local row yet (e.g. updating a SKU synced elsewhere) — fall back to a
 		# fetch so the register has something to show.
 		return sync_listing(sku, marketplace=mp.name)
-	row = frappe.get_doc("Amazon Listing", sku)
+	row = frappe.get_doc("Amazon Product Listing", sku)
 	for field in ("title", "price", "quantity", "condition", "description"):
 		if field in changes and changes[field] is not None:
 			row.set(field, changes[field])
@@ -435,7 +436,7 @@ def _build_patches(mp, changes):
 
 def _put_fallback(client, conn, mp, sku, changes):
 	"""Rebuild a full PUT from the stored row merged with the requested changes."""
-	row = frappe.get_doc("Amazon Listing", sku)
+	row = frappe.get_doc("Amazon Product Listing", sku)
 	product_type = _stored_product_type(sku)
 	if not product_type:
 		frappe.throw(_("Cannot fall back to PUT: no product type stored for {0}.").format(sku))
@@ -479,7 +480,7 @@ def _row_images(row):
 
 def _stored_product_type(sku):
 	"""Best-effort product type from the stored raw summary."""
-	raw = frappe.db.get_value("Amazon Listing", sku, "raw_summary")
+	raw = frappe.db.get_value("Amazon Product Listing", sku, "raw_summary")
 	if raw:
 		try:
 			return (json.loads(raw) or {}).get("productType")
@@ -504,8 +505,8 @@ def delete_listing(sku, marketplace=None):
 	issues = _issues_from(resp)
 	_raise_on_error_issues(issues, _("deletion"))
 
-	if frappe.db.exists("Amazon Listing", sku):
-		row = frappe.get_doc("Amazon Listing", sku)
+	if frappe.db.exists("Amazon Product Listing", sku):
+		row = frappe.get_doc("Amazon Product Listing", sku)
 		row.listing_status = "inactive"
 		row.last_synced_at = now_datetime()
 		row.save(ignore_permissions=True)
@@ -548,17 +549,42 @@ def _derive_status(summary, issues):
 	return "inactive"
 
 
+def _item_asin(sku, item):
+	"""The ASIN for a listing payload, falling back to the one we already stored.
+
+	An offer-only summary can omit the ASIN, but we recorded it when the offer was
+	published — and without an ASIN there is no catalog content to look up.
+	"""
+	summaries = item.get("summaries") or []
+	asin = (summaries[0] if summaries else {}).get("asin")
+	if asin:
+		return asin
+	return frappe.db.get_value("Amazon Product Listing", sku, "asin")
+
+
 def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, product_type=None):
-	"""Fetch one item from Amazon and upsert the Amazon Listing register row."""
+	"""Fetch one item from Amazon and upsert the Amazon Product Listing register row."""
 	mp = _marketplace(marketplace)
 	item = get_listing_item(sku, marketplace=mp.name)
+	# Content comes from the ASIN's catalog entry, not from our own listing
+	# attributes — see spapi.catalog for why an offer-only listing has none.
+	asin = _item_asin(sku, item)
+	catalog_content = catalog.fetch_content([asin], mp).get(asin) if asin else None
 	return _upsert_from_item(
-		sku, mp, item, product=product, fulfillment_channel=fulfillment_channel, product_type=product_type
+		sku,
+		mp,
+		item,
+		product=product,
+		fulfillment_channel=fulfillment_channel,
+		product_type=product_type,
+		catalog_content=catalog_content,
 	)
 
 
-def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, product_type=None):
-	"""Upsert an Amazon Listing row from a Listings-Items payload (single GET or
+def _upsert_from_item(
+	sku, mp, item, product=None, fulfillment_channel=None, product_type=None, catalog_content=None
+):
+	"""Upsert an Amazon Product Listing row from a Listings-Items payload (single GET or
 	a searchListingsItems entry — both share the summaries/issues/offers shape)."""
 	summaries = item.get("summaries") or []
 	summary = summaries[0] if summaries else {}
@@ -576,10 +602,8 @@ def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, pro
 		quantity = cint(fa[0].get("quantity"))
 
 	values = {
-		"doctype": "Amazon Listing",
+		"doctype": "Amazon Product Listing",
 		"sku": sku,
-		"title": summary.get("itemName"),
-		"asin": summary.get("asin"),
 		"marketplace": mp.name,
 		"currency": mp.currency,
 		"price": price,
@@ -593,11 +617,20 @@ def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, pro
 			default=str,
 		),
 	}
+	# Title and ASIN come from the summary, which an offer-only or
+	# variation-parent SKU can omit entirely. Assigning them unconditionally is
+	# how a sync used to blank a perfectly good title (and with it the row's
+	# display name, since title_field falls back to `name` == the SKU), so only
+	# set what Amazon actually gave us. _apply_content may still supply a title
+	# from the catalog below.
+	for field, value in (("title", summary.get("itemName")), ("asin", summary.get("asin"))):
+		if value:
+			values[field] = value
 	if product:
 		values["product"] = product
 
-	if frappe.db.exists("Amazon Listing", sku):
-		row = frappe.get_doc("Amazon Listing", sku)
+	if frappe.db.exists("Amazon Product Listing", sku):
+		row = frappe.get_doc("Amazon Product Listing", sku)
 		row.update({k: v for k, v in values.items() if k != "doctype"})
 	else:
 		row = frappe.get_doc(values)
@@ -607,44 +640,179 @@ def _upsert_from_item(sku, mp, item, product=None, fulfillment_channel=None, pro
 	for issue in issues:
 		row.append("suppression_reasons", issue)
 
-	# Content (description/bullets/keywords/images) only comes back when the
-	# payload includes attributes (single GET). The bulk searchListingsItems path
-	# omits attributes, so we leave any existing/pending content untouched there.
-	_apply_content_from_item(row, mp, item, summary)
+	_apply_content(row, mp, item, summary, catalog_content=catalog_content)
+	_apply_variation(row, catalog_content)
 
 	row.flags.ignore_permissions = True
 	row.save(ignore_permissions=True)
 	return {"sku": sku, "listing_status": row.listing_status, "issues": issues}
 
 
-def _apply_content_from_item(row, mp, item, summary):
-	"""Populate description + image/bullet/keyword tables from a Listings payload."""
-	attributes = item.get("attributes") or {}
-	if not attributes:
-		return  # bulk sync (no attributes) — keep whatever content we already have
+def _own_attr_values(attributes, name):
+	"""Text values of one of *our own* Listings attributes."""
+	return [
+		e["value"]
+		for e in (attributes.get(name) or [])
+		if isinstance(e.get("value"), str) and e["value"].strip()
+	]
 
-	def _values(name):
-		return [e.get("value") for e in (attributes.get(name) or []) if e.get("value") is not None]
 
-	description = _values("product_description")
-	row.description = description[0] if description else None
+def _own_attr(attributes, name):
+	"""The first value of one of our own Listings attributes, or None."""
+	values = _own_attr_values(attributes, name)
+	return values[0] if values else None
 
-	row.set("bullet_points", [{"bullet": b} for b in _values("bullet_point") if b])
-	row.set("keywords", [{"keyword": k} for k in _values("generic_keyword") if k])
 
-	images = []
+def _own_images(attributes):
+	"""Images from our own image-locator attributes, main first."""
+	out = []
 	main_loc = attributes.get("main_product_image_locator") or []
 	main_url = main_loc[0].get("media_location") if main_loc else None
-	if not main_url and summary.get("mainImage"):
-		main_url = summary["mainImage"].get("link")
 	if main_url:
-		images.append({"image_url": main_url, "is_main": 1})
+		out.append({"url": main_url, "is_main": True})
 	for i in range(1, 9):
 		loc = attributes.get(f"other_product_image_locator_{i}") or []
 		url = loc[0].get("media_location") if loc else None
 		if url:
-			images.append({"image_url": url, "is_main": 0})
-	row.set("images", images)
+			out.append({"url": url, "is_main": False})
+	if out and not out[0]["is_main"]:
+		out[0]["is_main"] = True
+	return out
+
+
+def _apply_content(row, mp, item, summary, catalog_content=None):
+	"""Fill title/description/bullets/keywords/images on the register row.
+
+	Precedence: our own Listings attributes first (authoritative when this seller
+	is the ASIN's content contributor), then the catalog content for the ASIN,
+	then whatever the row already holds.
+
+	That last step is the important one. An offer-only listing carries no content
+	attributes at all (see spapi.catalog for why), so the previous version — which
+	read only our own attributes and assigned unconditionally — wrote None over
+	the description and emptied the bullet/keyword/image tables on every single
+	sync. Nothing here blanks a field: a value we could not find is a value we
+	leave alone, and clearing content is done by the operator, not by a sync.
+	"""
+	attributes = item.get("attributes") or {}
+	catalog_content = catalog_content or {}
+
+	title = _own_attr(attributes, "item_name") or catalog_content.get("title")
+	if title:
+		row.title = title
+
+	description = _own_attr(attributes, "product_description") or catalog_content.get("description")
+	if description:
+		row.description = description
+
+	bullets = _own_attr_values(attributes, "bullet_point") or catalog_content.get("bullets") or []
+	if bullets:
+		row.set("bullet_points", [{"bullet": b} for b in bullets])
+
+	keywords = _own_attr_values(attributes, "generic_keyword") or catalog_content.get("keywords") or []
+	if keywords:
+		row.set("keywords", [{"keyword": k} for k in keywords])
+
+	images = _own_images(attributes) or catalog_content.get("images") or []
+	if not images and (summary.get("mainImage") or {}).get("link"):
+		images = [{"url": summary["mainImage"]["link"], "is_main": True}]
+	if images:
+		row.set(
+			"images",
+			[{"image_url": im["url"], "is_main": 1 if im["is_main"] else 0} for im in images],
+		)
+
+
+def _listing_for_asin(asin, marketplace=None):
+	"""The register row for an ASIN, if this seller lists it.
+
+	Empty is the normal answer for a variation parent: a parent is not a buyable
+	offer, so most sellers have no SKU of their own for it. The link therefore
+	fills in only once (and if) the parent turns up in the register — a later sync
+	picks it up, which is why this is resolved on every sync rather than once.
+
+	Scoped to the marketplace, because the same ASIN is listed on several of them
+	and a family only means anything within one. Ordered, because nothing stops a
+	seller having two SKUs on one ASIN: without an order the winner would vary
+	between syncs and each sync would write a spurious new version of the row.
+	"""
+	if not asin:
+		return None
+	filters = {"asin": asin}
+	if marketplace:
+		filters["marketplace"] = marketplace
+	return frappe.db.get_value("Amazon Product Listing", filters, "name", order_by="name asc")
+
+
+def _apply_variation(row, catalog_content):
+	"""Record where this SKU sits in its variation family.
+
+	Applied verbatim, clears included — unlike content, parentage is something
+	Amazon answers definitively whenever `relationships` is requested, so "no
+	parent ASIN" means standalone, not unknown, and a listing that has left a
+	family should stop claiming it.
+
+	A missing answer is still not an answer: when the catalog look-up failed or
+	the row has no ASIN to look up, catalog_content is None and nothing changes.
+	"""
+	if catalog_content is None:
+		return
+
+	parent_asin = catalog_content.get("parent_asin") or None
+	row.parent_asin = parent_asin
+	row.parent_listing = _listing_for_asin(parent_asin, marketplace=row.get("marketplace"))
+	row.variation_theme = catalog_content.get("variation_theme") or None
+	row.is_variation_parent = 1 if catalog_content.get("is_variation_parent") else 0
+
+
+def variation_family(parent_asin, marketplace=None):
+	"""Every SKU this seller lists under one parent ASIN.
+
+	The parent→SKU mapping the register could not answer before. Returns the
+	parent's own row when the seller happens to list it, plus the children.
+	"""
+	if not parent_asin:
+		frappe.throw(_("A parent ASIN is required."))
+
+	filters = {"parent_asin": parent_asin}
+	if marketplace:
+		filters["marketplace"] = marketplace
+	children = frappe.get_all(
+		"Amazon Product Listing",
+		filters=filters,
+		fields=[
+			"name as sku",
+			"title",
+			"asin",
+			"listing_status",
+			"price",
+			"quantity",
+			"variation_theme",
+		],
+		order_by="name asc",
+	)
+
+	parent_filters = {"asin": parent_asin}
+	if marketplace:
+		parent_filters["marketplace"] = marketplace
+	parent = frappe.db.get_value(
+		"Amazon Product Listing", parent_filters, ["name", "title", "variation_theme"], as_dict=True
+	)
+
+	# The theme is a property of the family, so any row in it can supply it —
+	# useful because the parent is the row most likely to be missing.
+	theme = (parent or {}).get("variation_theme") or next(
+		(c["variation_theme"] for c in children if c.get("variation_theme")), None
+	)
+
+	return {
+		"parent_asin": parent_asin,
+		"parent_sku": (parent or {}).get("name"),
+		"parent_title": (parent or {}).get("title"),
+		"variation_theme": theme,
+		"children": children,
+		"child_count": len(children),
+	}
 
 
 # --- bulk sync (searchListingsItems) -----------------------------------------
@@ -659,7 +827,10 @@ SEARCH_MAX_PAGES = 60  # safety cap (1000-SKU limit reached well before this)
 def _search_listings_items(mp, client, page_token=None):
 	params = {
 		"marketplaceIds": mp.marketplace_id,
-		"includedData": "summaries,issues,offers,fulfillmentAvailability",
+		# `attributes` is requested so a seller who *does* own an ASIN's content
+		# gets it straight from their own listing; for offer-only SKUs it comes
+		# back with offer attributes only and spapi.catalog fills the gap.
+		"includedData": "summaries,attributes,issues,offers,fulfillmentAvailability",
 		"pageSize": SEARCH_PAGE_SIZE,
 		"issueLocale": DEFAULT_ISSUE_LOCALE,
 	}
@@ -691,11 +862,19 @@ def sync_all_listings(marketplace=None, notify_user=None):
 	try:
 		for page in range(SEARCH_MAX_PAGES):
 			resp = _search_listings_items(mp, client, page_token=page_token)
-			for item in resp.get("items", []) or []:
-				sku = item.get("sku")
-				if not sku:
-					continue
-				result = _upsert_from_item(sku, mp, item)
+			items = [i for i in (resp.get("items") or []) if i.get("sku")]
+			# One catalog call per page, not per SKU: the page holds at most
+			# SEARCH_PAGE_SIZE listings and `identifiers` takes 20 ASINs, so the
+			# content look-up costs a single extra request per page.
+			content_by_asin = catalog.fetch_content(
+				[_item_asin(i["sku"], i) for i in items], mp, client=client
+			)
+			for item in items:
+				sku = item["sku"]
+				asin = _item_asin(sku, item)
+				result = _upsert_from_item(
+					sku, mp, item, catalog_content=content_by_asin.get(asin) if asin else None
+				)
 				total += 1
 				status = result["listing_status"]
 				by_status[status] = by_status.get(status, 0) + 1
