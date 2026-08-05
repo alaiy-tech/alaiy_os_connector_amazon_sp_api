@@ -62,6 +62,31 @@ operations. No SP-API calls are ever made from the browser.
 | **Seller Feedback** | Recent seller feedback pulled from Amazon. |
 | **SP-API Log** | Audit log of every SP-API request/response. |
 
+#### Variation families
+
+Each listing records where it sits in its Amazon variation family, read from the
+Catalog Items `relationships` data on every sync:
+
+| Field | Meaning |
+| --- | --- |
+| **Parent ASIN** | The family's parent. Empty on a standalone listing, and on a parent itself. Indexed and available as a standard filter, so filtering on it shows every SKU in one family. |
+| **Parent Listing** | The register row for that parent ASIN, when this seller lists it. Often empty: a parent is not a buyable offer, so many sellers have no SKU for it. |
+| **Variation Theme** | What the family varies by, e.g. `SIZE/COLOR`. |
+| **Is Variation Parent** | This row *is* a family container rather than a buyable offer. Parent rows carry no price or quantity. |
+
+From a parent, the **Variation** connections tab lists its child rows. From any
+row in a family, **Amazon → Variation Family** shows the whole family. The same
+mapping is available programmatically:
+
+```python
+frappe.call("alaiy_os_connector_amazon_sp_api.api.variation_family", parent_asin="B0PARENT001")
+# -> {parent_asin, parent_sku, parent_title, variation_theme, children: [...], child_count}
+```
+
+Parentage is only known for rows that have been through a listing sync — the
+Merchant Listings report carries no parent/child columns, so a
+reconcile-only row has an empty family until **Sync All from Amazon** runs.
+
 Orders deliberately have **no DocType of their own** — they are created as
 ERPNext **Sales Orders** carrying `amazon_order_id`, `amazon_order_status`,
 `amazon_marketplace`, `amazon_fulfillment_channel`, `amazon_order_total`, and
