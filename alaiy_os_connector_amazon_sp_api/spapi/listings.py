@@ -641,6 +641,7 @@ def _upsert_from_item(
 		row.append("suppression_reasons", issue)
 
 	_apply_content(row, mp, item, summary, catalog_content=catalog_content)
+	_apply_variation(row, catalog_content)
 
 	row.flags.ignore_permissions = True
 	row.save(ignore_permissions=True)
@@ -720,6 +721,98 @@ def _apply_content(row, mp, item, summary, catalog_content=None):
 			"images",
 			[{"image_url": im["url"], "is_main": 1 if im["is_main"] else 0} for im in images],
 		)
+
+
+def _listing_for_asin(asin, marketplace=None):
+	"""The register row for an ASIN, if this seller lists it.
+
+	Empty is the normal answer for a variation parent: a parent is not a buyable
+	offer, so most sellers have no SKU of their own for it. The link therefore
+	fills in only once (and if) the parent turns up in the register — a later sync
+	picks it up, which is why this is resolved on every sync rather than once.
+
+	Scoped to the marketplace, because the same ASIN is listed on several of them
+	and a family only means anything within one. Ordered, because nothing stops a
+	seller having two SKUs on one ASIN: without an order the winner would vary
+	between syncs and each sync would write a spurious new version of the row.
+	"""
+	if not asin:
+		return None
+	filters = {"asin": asin}
+	if marketplace:
+		filters["marketplace"] = marketplace
+	return frappe.db.get_value("Amazon Product Listing", filters, "name", order_by="name asc")
+
+
+def _apply_variation(row, catalog_content):
+	"""Record where this SKU sits in its variation family.
+
+	Applied verbatim, clears included — unlike content, parentage is something
+	Amazon answers definitively whenever `relationships` is requested, so "no
+	parent ASIN" means standalone, not unknown, and a listing that has left a
+	family should stop claiming it.
+
+	A missing answer is still not an answer: when the catalog look-up failed or
+	the row has no ASIN to look up, catalog_content is None and nothing changes.
+	"""
+	if catalog_content is None:
+		return
+
+	parent_asin = catalog_content.get("parent_asin") or None
+	row.parent_asin = parent_asin
+	row.parent_listing = _listing_for_asin(parent_asin, marketplace=row.get("marketplace"))
+	row.variation_theme = catalog_content.get("variation_theme") or None
+	row.is_variation_parent = 1 if catalog_content.get("is_variation_parent") else 0
+
+
+def variation_family(parent_asin, marketplace=None):
+	"""Every SKU this seller lists under one parent ASIN.
+
+	The parent→SKU mapping the register could not answer before. Returns the
+	parent's own row when the seller happens to list it, plus the children.
+	"""
+	if not parent_asin:
+		frappe.throw(_("A parent ASIN is required."))
+
+	filters = {"parent_asin": parent_asin}
+	if marketplace:
+		filters["marketplace"] = marketplace
+	children = frappe.get_all(
+		"Amazon Product Listing",
+		filters=filters,
+		fields=[
+			"name as sku",
+			"title",
+			"asin",
+			"listing_status",
+			"price",
+			"quantity",
+			"variation_theme",
+		],
+		order_by="name asc",
+	)
+
+	parent_filters = {"asin": parent_asin}
+	if marketplace:
+		parent_filters["marketplace"] = marketplace
+	parent = frappe.db.get_value(
+		"Amazon Product Listing", parent_filters, ["name", "title", "variation_theme"], as_dict=True
+	)
+
+	# The theme is a property of the family, so any row in it can supply it —
+	# useful because the parent is the row most likely to be missing.
+	theme = (parent or {}).get("variation_theme") or next(
+		(c["variation_theme"] for c in children if c.get("variation_theme")), None
+	)
+
+	return {
+		"parent_asin": parent_asin,
+		"parent_sku": (parent or {}).get("name"),
+		"parent_title": (parent or {}).get("title"),
+		"variation_theme": theme,
+		"children": children,
+		"child_count": len(children),
+	}
 
 
 # --- bulk sync (searchListingsItems) -----------------------------------------

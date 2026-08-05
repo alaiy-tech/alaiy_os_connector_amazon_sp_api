@@ -210,6 +210,18 @@ def delete_listing(sku, marketplace=None):
 
 
 @frappe.whitelist()
+def variation_family(parent_asin, marketplace=None):
+	"""Every SKU this seller lists under one parent ASIN.
+
+	Read-only and hits no Amazon API — it reads the parentage the sync recorded —
+	so it is gated on read permission for the register rather than on the manager
+	roles the write endpoints require.
+	"""
+	frappe.has_permission("Amazon Product Listing", "read", throw=True)
+	return listings.variation_family(parent_asin, marketplace=marketplace)
+
+
+@frappe.whitelist()
 def sync_listing(sku, marketplace=None):
 	"""Re-fetch one listing from Amazon and refresh its register row."""
 	_require_manager()
