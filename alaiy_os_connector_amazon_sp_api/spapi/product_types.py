@@ -60,14 +60,13 @@ def suggest_product_types(title, marketplace=None, client=None, limit=None):
 	storage) and only the operator can settle it. An empty list means Amazon
 	recognised nothing, which is a real answer and not an error.
 	"""
-	# Local import: listings imports nothing from here, but keeping the
-	# marketplace resolver in one place is worth the deferred import.
-	from alaiy_os_connector_amazon_sp_api.spapi.listings import _marketplace
-
 	title = (title or "").strip()
 	if not title:
 		frappe.throw(_("Enter a product title to look up its product type."))
 
+	# Local import: listings imports nothing from here, but keeping the
+	# marketplace resolver in one place is worth the deferred import.
+	from alaiy_os_connector_amazon_sp_api.spapi.listings import _marketplace
 	mp = _marketplace(marketplace)
 	client = client or SpApiClient()
 
