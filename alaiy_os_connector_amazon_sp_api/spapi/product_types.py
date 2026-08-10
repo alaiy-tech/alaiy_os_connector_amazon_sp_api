@@ -84,5 +84,5 @@ def suggest_product_types(title, marketplace=None, client=None, limit=None):
 			frappe.throw(describe_forbidden(e, role_free=False))
 		raise
 
-	limit = limit or PRODUCT_TYPE_SUGGESTION_LIMIT
+	limit = PRODUCT_TYPE_SUGGESTION_LIMIT if limit is None else limit
 	return suggestions_from_response(resp, mp.marketplace_id)[:limit]
