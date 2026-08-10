@@ -498,9 +498,10 @@ def product_type_from_raw_summary(raw):
 	if not raw:
 		return None
 	try:
-		return (json.loads(raw) or {}).get("productType")
+		blob = json.loads(raw)
 	except (ValueError, TypeError):
 		return None
+	return blob.get("productType") if isinstance(blob, dict) else None
 
 
 # --- delete ------------------------------------------------------------------
