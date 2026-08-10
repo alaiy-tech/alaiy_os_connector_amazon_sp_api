@@ -233,8 +233,7 @@ function amazon_publish(frm) {
 		frappe.msgprint(__("SKU, ASIN and Marketplace are required to publish an offer."));
 		return;
 	}
-	const product_type = frm.doc.__amazon_product_type || frm.doc.product_type;
-	if (!product_type) {
+	if (!frm.doc.product_type) {
 		frappe.msgprint(__("Product Type is required. Use Search Catalog to pick an ASIN first."));
 		return;
 	}
@@ -243,7 +242,7 @@ function amazon_publish(frm) {
 		args: {
 			sku: frm.doc.sku,
 			asin: frm.doc.asin,
-			product_type: product_type,
+			product_type: frm.doc.product_type,
 			price: frm.doc.price,
 			quantity: frm.doc.quantity,
 			condition: frm.doc.condition,
@@ -308,8 +307,7 @@ function render_catalog_results(frm, dialog, items) {
 			img.is_main = 1;
 			frm.refresh_field("images");
 		}
-		// Product Type isn't a stored field; stash it for Publish Offer.
-		frm.doc.__amazon_product_type = it.product_type;
+		if (it.product_type) frm.set_value("product_type", it.product_type);
 		if (dialog.get_value("marketplace")) frm.set_value("marketplace", dialog.get_value("marketplace"));
 		dialog.hide();
 		frappe.show_alert({ message: __("Selected {0}", [it.asin]), indicator: "green" });

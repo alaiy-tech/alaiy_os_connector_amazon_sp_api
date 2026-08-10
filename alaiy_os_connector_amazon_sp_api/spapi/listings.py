@@ -479,14 +479,28 @@ def _row_images(row):
 
 
 def _stored_product_type(sku):
-	"""Best-effort product type from the stored raw summary."""
-	raw = frappe.db.get_value("Amazon Product Listing", sku, "raw_summary")
-	if raw:
-		try:
-			return (json.loads(raw) or {}).get("productType")
-		except (ValueError, TypeError):
-			return None
-	return None
+	"""Best-effort product type for a SKU: the field first, raw_summary second.
+
+	The field is the one an operator can see and correct; raw_summary is where
+	this used to live, and it stays the fallback for rows last synced before the
+	field existed and not yet touched by the backfill patch.
+	"""
+	product_type, raw = (
+		frappe.db.get_value("Amazon Product Listing", sku, ["product_type", "raw_summary"]) or (None, None)
+	)
+	if product_type:
+		return product_type
+	return product_type_from_raw_summary(raw)
+
+
+def product_type_from_raw_summary(raw):
+	"""The productType recorded inside a stored raw_summary blob, if any."""
+	if not raw:
+		return None
+	try:
+		return (json.loads(raw) or {}).get("productType")
+	except (ValueError, TypeError):
+		return None
 
 
 # --- delete ------------------------------------------------------------------
@@ -617,13 +631,19 @@ def _upsert_from_item(
 			default=str,
 		),
 	}
-	# Title and ASIN come from the summary, which an offer-only or
+	# Title, ASIN and product type come from the summary, which an offer-only or
 	# variation-parent SKU can omit entirely. Assigning them unconditionally is
 	# how a sync used to blank a perfectly good title (and with it the row's
 	# display name, since title_field falls back to `name` == the SKU), so only
 	# set what Amazon actually gave us. _apply_content may still supply a title
-	# from the catalog below.
-	for field, value in (("title", summary.get("itemName")), ("asin", summary.get("asin"))):
+	# from the catalog below. For the product type that also protects the value
+	# Search Catalog put on the row before the offer was ever published: without
+	# it, every write to Amazon fails for want of a productType.
+	for field, value in (
+		("title", summary.get("itemName")),
+		("asin", summary.get("asin")),
+		("product_type", summary.get("productType") or product_type),
+	):
 		if value:
 			values[field] = value
 	if product:

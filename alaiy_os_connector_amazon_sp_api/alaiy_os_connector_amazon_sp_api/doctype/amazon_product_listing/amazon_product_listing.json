@@ -10,6 +10,7 @@
   "sku",
   "title",
   "asin",
+  "product_type",
   "product",
   "column_break_ident",
   "marketplace",
@@ -60,6 +61,13 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "ASIN"
+  },
+  {
+   "fieldname": "product_type",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Product Type",
+   "description": "Amazon's product type for this listing, e.g. SHIRT or LUGGAGE. Picked by Search Catalog before publishing an offer, and refreshed from the summary on every sync. Every write to Amazon has to declare it, so a row without one cannot be updated."
   },
   {
    "fieldname": "product",
@@ -249,7 +257,7 @@
    "link_fieldname": "parent_listing"
   }
  ],
- "modified": "2026-08-05 00:00:00.000000",
+ "modified": "2026-08-10 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Product Listing",

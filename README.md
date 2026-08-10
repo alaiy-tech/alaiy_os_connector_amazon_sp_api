@@ -62,6 +62,15 @@ operations. No SP-API calls are ever made from the browser.
 | **Seller Feedback** | Recent seller feedback pulled from Amazon. |
 | **SP-API Log** | Audit log of every SP-API request/response. |
 
+#### Product type
+
+Each listing stores Amazon's **Product Type** for the SKU (`SHIRT`, `LUGGAGE`, …).
+Search Catalog fills it in when an ASIN is picked, and every sync refreshes it
+from the listing summary — but never blanks it, because an offer-only listing and
+a variation parent both come back without one. Keep it: Amazon rejects any
+create or update that does not declare a product type, so a row that loses it
+can no longer be pushed.
+
 #### Variation families
 
 Each listing records where it sits in its Amazon variation family, read from the
