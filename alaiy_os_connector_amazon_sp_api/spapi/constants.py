@@ -36,6 +36,17 @@ REGION_CONSENT_HOSTS = {
 CATALOG_ITEMS_PATH = "/catalog/2022-04-01/items"
 LISTINGS_ITEMS_BASE = "/listings/2021-08-01/items"
 
+# searchDefinitionsProductTypes (Product Type Definitions API 2020-09-01). A
+# different API from the two above: it searches Amazon's registry of product
+# types rather than the catalog of products, which is why it can answer for a
+# product Amazon has never seen.
+PRODUCT_TYPE_DEFINITIONS_PATH = "/definitions/2020-09-01/productTypes"
+
+# How many suggestions the title look-up hands back. Amazon returns its list
+# best-match-first and unranked beyond that; past a handful the tail is noise
+# an operator won't read.
+PRODUCT_TYPE_SUGGESTION_LIMIT = 10
+
 # searchCatalogItems accepts at most 20 values in `identifiers`, which is what
 # lets spapi.catalog fetch content for a whole page of listings in one call.
 CATALOG_MAX_IDENTIFIERS = 20

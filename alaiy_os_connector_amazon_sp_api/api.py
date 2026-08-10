@@ -3,7 +3,7 @@
 """Whitelisted entry points for Desk/JS. All SP-API access is server-side.
 
 Phase 1: connection status, connect URL, disconnect, ping, health sync/summary.
-Phase 2: catalog search + listing create/update/delete/sync.
+Phase 2: catalog search, product-type lookup, listing create/update/delete/sync.
 Phase 4: Seller Central order sync into Sales Orders.
 """
 
@@ -13,7 +13,7 @@ import frappe
 from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
-from alaiy_os_connector_amazon_sp_api.spapi import health, listings, reconcile
+from alaiy_os_connector_amazon_sp_api.spapi import health, listings, product_types, reconcile
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
 )
@@ -164,6 +164,24 @@ def search_catalog(query, marketplace=None, page_size=10):
 	"""Search the Amazon catalog for an ASIN + product type."""
 	_require_manager()
 	return listings.search_catalog(query, marketplace=marketplace, page_size=page_size)
+
+
+@frappe.whitelist()
+def suggest_product_type(title, marketplace=None):
+	"""Ask Amazon which product type a product title belongs to.
+
+	Returns [{product_type, display_name}], best match first — a list, because a
+	title is often ambiguous and the caller is the one who can choose. Unlike
+	`search_catalog` this needs no ASIN, so it answers for products that are not
+	in Amazon's catalog yet, which is when a product type is hardest to come by
+	and most needed (every Listings write must declare one).
+
+	Other apps calling this in-process should import
+	`spapi.product_types.suggest_product_types` instead; this wrapper exists for
+	RPC callers and carries the manager-role gate that goes with them.
+	"""
+	_require_manager()
+	return product_types.suggest_product_types(title, marketplace=marketplace)
 
 
 @frappe.whitelist()

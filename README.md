@@ -46,7 +46,7 @@ operations. No SP-API calls are ever made from the browser.
 | `api.py` | Whitelisted entry points for Desk/JS (all access is server-side and role-guarded). |
 | `oauth.py`, `www/amazon_oauth_*` | Login with Amazon consent + callback flow. |
 | `app_config.py` | Resolves credentials, region, endpoint, and consent host from `site_config.json`. |
-| `spapi/` | SP-API client: `auth`, `client`, `listings`, `orders`, `health`, `reports`, `constants`. |
+| `spapi/` | SP-API client: `auth`, `client`, `listings`, `product_types`, `orders`, `health`, `reports`, `constants`. |
 | `tasks.py` | Scheduled jobs (health sync, connection refresh, listing reconcile, order sync). |
 | `connector_meta.py` | Registration metadata for the AlaiyOS OS Connector Registry. |
 
@@ -199,6 +199,7 @@ All operations run server-side through whitelisted methods in
 | `ping` / `test_connection` | Verify the connection via a preflight. |
 | `sync_health` / `get_health_summary` | Sync and read account-health metrics + feedback. |
 | `search_catalog` | Search the Amazon catalog for an ASIN + product type. |
+| `suggest_product_type` | Resolve a product title to Amazon product types, best match first. |
 | `create_listing` / `update_listing` / `delete_listing` | Manage offers for a SKU. |
 | `sync_listing` / `sync_all_listings` | Refresh one listing, or the whole catalog (background job). |
 | `sync_orders` / `backfill_orders` | Pull orders into Sales Orders (background job). |
