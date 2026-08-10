@@ -46,7 +46,7 @@ def suggestions_from_response(resp, marketplace_id):
 		if not name:
 			continue
 		covered = entry.get("marketplaceIds")
-		if covered and marketplace_id not in covered:
+		if covered is not None and marketplace_id not in covered:
 			continue
 		out.append({"product_type": name, "display_name": entry.get("displayName") or name})
 	return out
