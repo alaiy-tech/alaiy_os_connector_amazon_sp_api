@@ -8,6 +8,11 @@ back to a full PUT when an attribute can't be patched. Delete ends the listing.
 After every write we re-fetch the item and upsert the Amazon Product Listing row
 so the register reflects Amazon's actual state.
 
+What an update *sends* is decided by comparing the operator's values against the
+live listing (compare_listing -> remote_snapshot), never against the register
+row: the row is only as fresh as the last sync, so it cannot say what Amazon is
+missing.
+
 Attribute shapes (purchasable_offer, fulfillment_availability, ...) follow the
 common product-type schema; they may need per-marketplace/product-type tuning
 against a real account.
@@ -308,8 +313,9 @@ def create_listing(
 
 
 # --- update ------------------------------------------------------------------
-# Amazon Product Listing fieldnames we allow through to the Listings Items attributes.
-_PATCHABLE = {
+# Amazon Product Listing fieldnames we allow through to the Listings Items
+# attributes, in the order a push preview lists them.
+_PUSH_FIELDS = (
 	"title",
 	"price",
 	"quantity",
@@ -318,7 +324,8 @@ _PATCHABLE = {
 	"bullet_points",
 	"keywords",
 	"images",
-}
+)
+_PATCHABLE = set(_PUSH_FIELDS)
 # Product-content attributes (as opposed to offer attributes); their presence
 # means a PUT fallback must not use requirements=LISTING_OFFER_ONLY (which strips them).
 _CONTENT_FIELDS = {"title", "description", "bullet_points", "keywords", "images"}
@@ -596,15 +603,13 @@ def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, 
 	)
 
 
-def _upsert_from_item(
-	sku, mp, item, product=None, fulfillment_channel=None, product_type=None, catalog_content=None
-):
-	"""Upsert an Amazon Product Listing row from a Listings-Items payload (single GET or
-	a searchListingsItems entry — both share the summaries/issues/offers shape)."""
-	summaries = item.get("summaries") or []
-	summary = summaries[0] if summaries else {}
-	issues = _issues_from(item)
+def _offer_from_item(item, summary):
+	"""The offer half of a Listings-Items payload: what this seller is selling at.
 
+	Price and quantity are None when Amazon returned no offer/availability block
+	at all, which is not the same as zero — the caller decides what an absent
+	answer means.
+	"""
 	price = None
 	offers = item.get("offers") or []
 	if offers:
@@ -616,15 +621,33 @@ def _upsert_from_item(
 	if fa:
 		quantity = cint(fa[0].get("quantity"))
 
+	return {
+		"price": price,
+		"quantity": quantity,
+		"condition": summary.get("conditionType") or "new_new",
+		"fulfillment_channel": (fa[0].get("fulfillmentChannelCode") if fa else None) or "DEFAULT",
+	}
+
+
+def _upsert_from_item(
+	sku, mp, item, product=None, fulfillment_channel=None, product_type=None, catalog_content=None
+):
+	"""Upsert an Amazon Product Listing row from a Listings-Items payload (single GET or
+	a searchListingsItems entry — both share the summaries/issues/offers shape)."""
+	summaries = item.get("summaries") or []
+	summary = summaries[0] if summaries else {}
+	issues = _issues_from(item)
+	offer = _offer_from_item(item, summary)
+
 	values = {
 		"doctype": "Amazon Product Listing",
 		"sku": sku,
 		"marketplace": mp.name,
 		"currency": mp.currency,
-		"price": price,
-		"quantity": quantity,
-		"condition": summary.get("conditionType") or "new_new",
-		"fulfillment_channel": fulfillment_channel or (fa[0].get("fulfillmentChannelCode") if fa else "DEFAULT"),
+		"price": offer["price"],
+		"quantity": offer["quantity"],
+		"condition": offer["condition"],
+		"fulfillment_channel": fulfillment_channel or offer["fulfillment_channel"],
 		"listing_status": _derive_status(summary, issues),
 		"last_synced_at": now_datetime(),
 		"raw_summary": json.dumps(
@@ -701,47 +724,191 @@ def _own_images(attributes):
 	return out
 
 
-def _apply_content(row, mp, item, summary, catalog_content=None):
-	"""Fill title/description/bullets/keywords/images on the register row.
+def _content_from_item(item, summary, catalog_content=None):
+	"""The content Amazon holds for a listing, in Amazon Product Listing terms.
 
 	Precedence: our own Listings attributes first (authoritative when this seller
-	is the ASIN's content contributor), then the catalog content for the ASIN,
-	then whatever the row already holds.
-
-	That last step is the important one. An offer-only listing carries no content
-	attributes at all (see spapi.catalog for why), so the previous version — which
-	read only our own attributes and assigned unconditionally — wrote None over
-	the description and emptied the bullet/keyword/image tables on every single
-	sync. Nothing here blanks a field: a value we could not find is a value we
-	leave alone, and clearing content is done by the operator, not by a sync.
+	is the ASIN's content contributor), then the catalog content for the ASIN.
+	Any field may come back None/empty — an offer-only listing contributes no
+	content of its own (see spapi.catalog for why) and the ASIN's owner may have
+	left keywords blank — so the caller decides what an absent value means.
 	"""
 	attributes = item.get("attributes") or {}
 	catalog_content = catalog_content or {}
 
-	title = _own_attr(attributes, "item_name") or catalog_content.get("title")
-	if title:
-		row.title = title
-
-	description = _own_attr(attributes, "product_description") or catalog_content.get("description")
-	if description:
-		row.description = description
-
-	bullets = _own_attr_values(attributes, "bullet_point") or catalog_content.get("bullets") or []
-	if bullets:
-		row.set("bullet_points", [{"bullet": b} for b in bullets])
-
-	keywords = _own_attr_values(attributes, "generic_keyword") or catalog_content.get("keywords") or []
-	if keywords:
-		row.set("keywords", [{"keyword": k} for k in keywords])
-
 	images = _own_images(attributes) or catalog_content.get("images") or []
 	if not images and (summary.get("mainImage") or {}).get("link"):
 		images = [{"url": summary["mainImage"]["link"], "is_main": True}]
-	if images:
+
+	return {
+		"title": _own_attr(attributes, "item_name") or catalog_content.get("title"),
+		"description": _own_attr(attributes, "product_description")
+		or catalog_content.get("description"),
+		"bullet_points": _own_attr_values(attributes, "bullet_point")
+		or catalog_content.get("bullets")
+		or [],
+		"keywords": _own_attr_values(attributes, "generic_keyword")
+		or catalog_content.get("keywords")
+		or [],
+		"images": images,
+	}
+
+
+def _apply_content(row, mp, item, summary, catalog_content=None):
+	"""Fill title/description/bullets/keywords/images on the register row.
+
+	Whatever _content_from_item could not find, the row keeps. That fallback is
+	the important one: an offer-only listing carries no content attributes at
+	all, so the previous version — which read only our own attributes and
+	assigned unconditionally — wrote None over the description and emptied the
+	bullet/keyword/image tables on every single sync. Nothing here blanks a
+	field, and clearing content is done by the operator, not by a sync.
+	"""
+	content = _content_from_item(item, summary, catalog_content)
+
+	if content["title"]:
+		row.title = content["title"]
+
+	if content["description"]:
+		row.description = content["description"]
+
+	if content["bullet_points"]:
+		row.set("bullet_points", [{"bullet": b} for b in content["bullet_points"]])
+
+	if content["keywords"]:
+		row.set("keywords", [{"keyword": k} for k in content["keywords"]])
+
+	if content["images"]:
 		row.set(
 			"images",
-			[{"image_url": im["url"], "is_main": 1 if im["is_main"] else 0} for im in images],
+			[
+				{"image_url": im["url"], "is_main": 1 if im["is_main"] else 0}
+				for im in content["images"]
+			],
 		)
+
+
+# --- push preview (diff against Amazon) --------------------------------------
+# Money is compared at two decimals so a 499 vs 499.00000001 round-trip through
+# JSON is not mistaken for a price change.
+_PRICE_PRECISION = 2
+
+
+def remote_snapshot(sku, marketplace=None):
+	"""What Amazon currently holds for a SKU, keyed like an Amazon Product Listing.
+
+	This — not the register row — is the baseline a push must diff against. The
+	row is only ever as fresh as the last sync, and update_listing deliberately
+	writes the values we *submitted* onto it and marks it pending, so a listing
+	Amazon rejected still reads locally as though it went through. Diffing an
+	edit against the row therefore answers "what did the operator change since
+	the last save?" when the question a push has to answer is "what does Amazon
+	not have yet?".
+	"""
+	mp = _marketplace(marketplace)
+	item = get_listing_item(sku, marketplace=mp.name)
+	summaries = item.get("summaries") or []
+	summary = summaries[0] if summaries else {}
+	issues = _issues_from(item)
+
+	# Same content precedence a sync uses (our own attributes, then the ASIN's
+	# catalog entry), because that is where the row's own content came from. Read
+	# only our own attributes here and every offer-only listing would report its
+	# whole catalog-sourced content as pending changes.
+	asin = _item_asin(sku, item)
+	catalog_content = catalog.fetch_content([asin], mp).get(asin) if asin else None
+
+	return {
+		"sku": sku,
+		**_offer_from_item(item, summary),
+		**_content_from_item(item, summary, catalog_content),
+		"asin": asin,
+		"product_type": summary.get("productType"),
+		"listing_status": _derive_status(summary, issues),
+		"issues": issues,
+	}
+
+
+def _clean_text(value):
+	return str(value).strip() if value is not None else ""
+
+
+def _clean_list(values):
+	return [str(v).strip() for v in (values or []) if _clean_text(v)]
+
+
+def diff_from_remote(remote, desired):
+	"""The fields of `desired` that Amazon does not already have.
+
+	`desired` is the operator's intended state (the form, unsaved edits
+	included); `remote` is a remote_snapshot().
+
+	Only fields the operator has something to say about are considered: a blank
+	scalar or an empty child table reads as "no opinion", never as "clear this on
+	Amazon". Clearing content is not something this button can express — an empty
+	image set produces no patch ops at all, so it would reach Amazon as an empty
+	submission — and reading a blank form field as a delete would let a
+	half-rendered form wipe a live listing.
+	"""
+	remote = remote or {}
+	desired = desired or {}
+	changes = {}
+
+	for field in ("title", "description", "condition"):
+		value = _clean_text(desired.get(field))
+		if value and value != _clean_text(remote.get(field)):
+			changes[field] = value
+
+	# A zero or blank price is not a price Amazon accepts, so it is read as
+	# "leave it alone" rather than pushed.
+	price = flt(desired.get("price"))
+	if price > 0:
+		current = remote.get("price")
+		if current is None or flt(current, _PRICE_PRECISION) != flt(price, _PRICE_PRECISION):
+			changes["price"] = price
+
+	# Zero *quantity* is meaningful — it is how a seller goes out of stock — so
+	# only an absent value is skipped here.
+	if _clean_text(desired.get("quantity")):
+		quantity = cint(desired["quantity"])
+		if remote.get("quantity") is None or cint(remote["quantity"]) != quantity:
+			changes["quantity"] = quantity
+
+	for field in ("bullet_points", "keywords"):
+		values = _clean_list(desired.get(field))
+		if values and values != _clean_list(remote.get(field)):
+			changes[field] = values
+
+	# Normalised on both sides so main-first ordering, not the operator's row
+	# order, decides whether the image set actually differs.
+	images = _normalize_images(desired.get("images"))
+	if images and images != _normalize_images(remote.get("images")):
+		changes["images"] = images
+
+	return changes
+
+
+def compare_listing(sku, desired, marketplace=None):
+	"""Preview a push: Amazon's current state, and the subset of `desired` that differs.
+
+	Read-only — it costs one Listings GET plus a catalog look-up and submits
+	nothing. The caller shows the diff, and pushes it with update_listing.
+	"""
+	mp = _marketplace(marketplace)
+	desired = {k: v for k, v in (desired or {}).items() if k in _PATCHABLE}
+	remote = remote_snapshot(sku, marketplace=mp.name)
+	changes = diff_from_remote(remote, desired)
+	changed = [f for f in _PUSH_FIELDS if f in changes]
+
+	return {
+		"sku": sku,
+		"marketplace": mp.name,
+		"listing_status": remote.get("listing_status"),
+		"remote": remote,
+		"changes": changes,
+		"changed": changed,
+		"content_changed": [f for f in changed if f in _CONTENT_FIELDS],
+	}
 
 
 def _listing_for_asin(asin, marketplace=None):

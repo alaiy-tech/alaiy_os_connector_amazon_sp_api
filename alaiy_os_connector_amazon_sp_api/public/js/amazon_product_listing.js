@@ -6,13 +6,6 @@
 
 frappe.ui.form.on("Amazon Product Listing", {
 	refresh(frm) {
-		// Snapshot the pushable fields as the baseline for "only send what changed".
-		// Captured only when the form is clean (fresh load / after reload_doc), so a
-		// user's unsaved edits are always diffed against the last Amazon-synced state.
-		if (!frm.is_new() && !frm.is_dirty()) {
-			frm.__amazon_baseline = amazon_snapshot(frm);
-		}
-
 		if (frm.doc.listing_status) {
 			const color = {
 				active: "green",
@@ -131,70 +124,129 @@ function amazon_show_family(frm, parent_asin) {
 	});
 }
 
-// Normalised, comparable view of the fields we can push to Amazon. Child tables
-// are flattened to strings so a simple !== catches adds/edits/removes/reorders.
-function amazon_snapshot(frm) {
+// The state the operator wants live on Amazon: the form as it stands, unsaved
+// edits included. What makes a field worth pushing is Amazon not having it, so
+// the comparison happens server-side against the live listing — see
+// spapi.listings.remote_snapshot for why the register row cannot be that
+// baseline.
+function amazon_desired(frm) {
 	return {
-		title: frm.doc.title || "",
-		price: flt(frm.doc.price),
-		quantity: cint(frm.doc.quantity),
-		condition: frm.doc.condition || "",
-		description: frm.doc.description || "",
-		bullet_points: (frm.doc.bullet_points || []).map((r) => r.bullet || "").join("\n"),
-		keywords: (frm.doc.keywords || []).map((r) => r.keyword || "").join("\n"),
+		title: frm.doc.title,
+		price: frm.doc.price,
+		quantity: frm.doc.quantity,
+		condition: frm.doc.condition,
+		description: frm.doc.description,
+		bullet_points: (frm.doc.bullet_points || []).map((r) => r.bullet).filter(Boolean),
+		keywords: (frm.doc.keywords || []).map((r) => r.keyword).filter(Boolean),
 		images: (frm.doc.images || [])
-			.map((r) => `${r.is_main ? 1 : 0}:${r.image_url || ""}`)
-			.join("\n"),
+			.filter((r) => r.image_url)
+			.map((r) => ({ url: r.image_url, is_main: !!r.is_main })),
 	};
 }
 
 function amazon_push_update(frm) {
-	const base = frm.__amazon_baseline || {};
-	const now = amazon_snapshot(frm);
-	const changes = {};
+	frappe.call({
+		method: "alaiy_os_connector_amazon_sp_api.api.compare_listing",
+		args: {
+			sku: frm.doc.sku,
+			marketplace: frm.doc.marketplace,
+			desired: JSON.stringify(amazon_desired(frm)),
+		},
+		freeze: true,
+		freeze_message: __("Checking what Amazon has…"),
+		callback: (r) => amazon_review_push(frm, r.message || {}),
+	});
+}
 
-	// Offer + content scalars: include only when they differ from the baseline.
-	if (now.title !== base.title) changes.title = frm.doc.title;
-	if (now.price !== base.price) changes.price = frm.doc.price;
-	if (now.quantity !== base.quantity) changes.quantity = frm.doc.quantity;
-	if (now.condition !== base.condition) changes.condition = frm.doc.condition;
-	if (now.description !== base.description) changes.description = frm.doc.description;
-	if (now.bullet_points !== base.bullet_points) {
-		changes.bullet_points = (frm.doc.bullet_points || []).map((r) => r.bullet).filter(Boolean);
-	}
-	if (now.keywords !== base.keywords) {
-		changes.keywords = (frm.doc.keywords || []).map((r) => r.keyword).filter(Boolean);
-	}
-	if (now.images !== base.images) {
-		changes.images = (frm.doc.images || [])
-			.filter((r) => r.image_url)
-			.map((r) => ({ url: r.image_url, is_main: !!r.is_main }));
-	}
+const AMAZON_PUSH_LABELS = {
+	title: "Title",
+	price: "Price",
+	quantity: "Quantity",
+	condition: "Condition",
+	description: "Description",
+	bullet_points: "Bullet Points",
+	keywords: "Keywords",
+	images: "Images",
+};
 
-	const contentKeys = ["title", "description", "bullet_points", "keywords", "images"];
-	const changedContent = contentKeys.filter((k) => k in changes);
+// Amazon's value vs the one about to replace it, per field. The operator is the
+// only one who can tell an intended edit from a drift the register introduced,
+// so nothing is submitted until they have seen both sides.
+function amazon_review_push(frm, comparison) {
+	const changed = comparison.changed || [];
+	const changes = comparison.changes || {};
+	const remote = comparison.remote || {};
 
-	if (!Object.keys(changes).length) {
-		frappe.msgprint(__("No changes to push. Edit a field, then push."));
+	if (!changed.length) {
+		frappe.msgprint({
+			title: __("Already in sync"),
+			indicator: "green",
+			message: __("Every field this row can push already matches Amazon."),
+		});
 		return;
 	}
 
-	const send = () =>
-		amazon_send_update(frm, changes);
+	const rows = changed
+		.map(
+			(field) => `<tr>
+				<td style="white-space:nowrap;"><b>${__(AMAZON_PUSH_LABELS[field] || field)}</b></td>
+				<td class="text-muted">${amazon_format_value(field, remote[field])}</td>
+				<td>${amazon_format_value(field, changes[field])}</td>
+			</tr>`
+		)
+		.join("");
 
 	// Content edits force Amazon to validate the full product-type schema, which
-	// often fails on offer-only listings. Warn before sending those.
-	if (changedContent.length) {
-		frappe.confirm(
-			__(
-				"You're changing product content ({0}). Amazon validates the full product-type schema for content changes, which can be rejected if required attributes are missing. Send anyway?",
-				[changedContent.join(", ")]
-			),
-			send
-		);
-	} else {
-		send();
+	// often fails on offer-only listings.
+	const changedContent = comparison.content_changed || [];
+	const warning = changedContent.length
+		? `<p class="text-warning small">${__(
+				"This push changes product content ({0}). Amazon validates the full product-type schema for content changes, which can be rejected if required attributes are missing.",
+				[changedContent.map((f) => __(AMAZON_PUSH_LABELS[f] || f)).join(", ")]
+			)}</p>`
+		: "";
+
+	const d = new frappe.ui.Dialog({
+		title: __("Push Update to Amazon"),
+		size: "large",
+		fields: [{ fieldtype: "HTML", fieldname: "diff" }],
+		primary_action_label: __("Push {0} Field(s)", [changed.length]),
+		primary_action() {
+			d.hide();
+			amazon_send_update(frm, changes);
+		},
+	});
+	d.fields_dict.diff.$wrapper.html(`
+		<p class="text-muted">${__("Only the fields below differ from the live listing; nothing else is submitted.")}</p>
+		<table class="table table-bordered">
+			<thead><tr>
+				<th style="width:18%;">${__("Field")}</th>
+				<th style="width:41%;">${__("On Amazon")}</th>
+				<th style="width:41%;">${__("Will Become")}</th>
+			</tr></thead>
+			<tbody>${rows}</tbody>
+		</table>
+		${warning}`);
+	d.show();
+}
+
+function amazon_format_value(field, value) {
+	if (value === null || value === undefined || value === "" || (Array.isArray(value) && !value.length)) {
+		return `<i class="text-muted">${__("not set")}</i>`;
 	}
+	if (field === "images") {
+		return value
+			.map((im) => `${im.is_main ? "★ " : ""}${frappe.utils.escape_html(im.url || "")}`)
+			.join("<br>");
+	}
+	if (Array.isArray(value)) {
+		return value.map((v) => frappe.utils.escape_html(String(v))).join("<br>");
+	}
+	const text = String(value);
+	// Descriptions run to thousands of characters; the diff only has to show
+	// enough of one to recognise it.
+	const shown = text.length > 300 ? `${text.slice(0, 300)}…` : text;
+	return frappe.utils.escape_html(shown);
 }
 
 function amazon_send_update(frm, changes) {

@@ -212,6 +212,20 @@ def create_listing(
 
 
 @frappe.whitelist()
+def compare_listing(sku, desired, marketplace=None):
+	"""What a push would change: Amazon's live state vs the values on the form.
+
+	Read-only. `desired` is the operator's intended state, so unsaved edits count
+	— what makes a field a change is Amazon not having it, not the row being
+	dirty. Feed the returned `changes` straight to update_listing.
+	"""
+	_require_manager()
+	if isinstance(desired, str):
+		desired = json.loads(desired)
+	return listings.compare_listing(sku, desired, marketplace=marketplace)
+
+
+@frappe.whitelist()
 def update_listing(sku, changes, marketplace=None):
 	"""Update price/quantity/condition on an existing listing (PATCH, PUT fallback)."""
 	_require_manager()
