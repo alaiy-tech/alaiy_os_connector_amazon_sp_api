@@ -1,0 +1,14 @@
+{
+  "name": "alaiy-os-connector-amazon-sp-api-interface",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Amazon SP-API connector screens contributed into the alaiy_os Next.js platform",
+  "comment": "Declarative only. Nothing is installed from here — src/ overlays onto alaiy_os/interface at compose time and builds against that app's dependency tree. The peers below record what this code assumes is there.",
+  "peerDependencies": {
+    "lucide-react": "^1.29.0",
+    "next": "^16.3.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sonner": "^2.0.7"
+  }
+}

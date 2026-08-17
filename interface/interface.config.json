@@ -1,0 +1,31 @@
+{
+  "app": "alaiy_os_connector_amazon_sp_api",
+  "platformVersion": "2.2.0",
+  "connectorId": "amazon_sp_api",
+  "nav": [
+    {
+      "group": "Amazon",
+      "items": [
+        {
+          "id": "amazon-listings",
+          "title": "Listings",
+          "icon": "list",
+          "url": "/os/channels/amazon/listings"
+        },
+        {
+          "id": "amazon-account-health",
+          "title": "Account Health",
+          "icon": "heart-pulse",
+          "url": "/os/channels/amazon/health"
+        },
+        {
+          "id": "amazon-settings",
+          "title": "Settings",
+          "icon": "settings",
+          "url": "/os/channels/amazon/settings"
+        }
+      ]
+    }
+  ],
+  "overrides": []
+}

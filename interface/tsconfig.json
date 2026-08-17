@@ -1,0 +1,70 @@
+{
+  // Editor / standalone-lint config only. The real typecheck happens in a
+  // composed workspace (`devbench compose <client>`), where these files sit
+  // inside alaiy_os/interface and the base's own tsconfig applies — that build
+  // is the tripwire for a platform upgrade breaking a contributed screen.
+  //
+  // `@alaiy-os/*` is the platform's outward contract; here it is resolved
+  // against a sibling checkout so an editor can follow it. Two candidates, tried
+  // in order, cover both layouts this app is edited in:
+  //   1. a bench (apps/<app>/interface) and devbench's one-clone-per-repo tree
+  //   2. devbench's older worktree tree (repos/<repo>/<branch>/interface)
+  // A path that resolves in neither is a red squiggle here and nothing else —
+  // composition never reads this file.
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noEmit": true,
+    "module": "esnext",
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./src/*"],
+
+      "@alaiy-os/ui/*": [
+        "../../alaiy_os/interface/src/components/ui/*",
+        "../../../../alaiy_os/main/interface/src/components/ui/*"
+      ],
+      "@alaiy-os/layout/*": [
+        "../../alaiy_os/interface/src/components/layout/*",
+        "../../../../alaiy_os/main/interface/src/components/layout/*"
+      ],
+      "@alaiy-os/list/*": [
+        "../../alaiy_os/interface/src/components/list/*",
+        "../../../../alaiy_os/main/interface/src/components/list/*"
+      ],
+      "@alaiy-os/frappe/*": [
+        "../../alaiy_os/interface/src/lib/frappe/*",
+        "../../../../alaiy_os/main/interface/src/lib/frappe/*"
+      ],
+      "@alaiy-os/hooks/*": [
+        "../../alaiy_os/interface/src/hooks/*",
+        "../../../../alaiy_os/main/interface/src/hooks/*"
+      ],
+      "@alaiy-os/stores/*": [
+        "../../alaiy_os/interface/src/stores/*",
+        "../../../../alaiy_os/main/interface/src/stores/*"
+      ],
+      "@alaiy-os/config/*": [
+        "../../alaiy_os/interface/src/config/*",
+        "../../../../alaiy_os/main/interface/src/config/*"
+      ],
+      "@alaiy-os/types/*": [
+        "../../alaiy_os/interface/src/types/*",
+        "../../../../alaiy_os/main/interface/src/types/*"
+      ],
+      "@alaiy-os/utils": [
+        "../../alaiy_os/interface/src/lib/utils",
+        "../../../../alaiy_os/main/interface/src/lib/utils"
+      ]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
