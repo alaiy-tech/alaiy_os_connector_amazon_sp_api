@@ -1,13 +1,16 @@
 # Copyright (c) 2026, Alaiy and contributors
 # For license information, please see license.txt
-"""GET /amazon-oauth/callback -> exchange code for refresh token, verify, persist."""
+"""GET /amazon-oauth/callback -> exchange code for refresh token, verify, persist.
+
+Only the rendering is here. The flow itself is `oauth.complete_authorization`,
+shared with `api.complete_oauth` — which is the same landing page inside the OS
+frontend, for the deployments where the frontend owns the site's hostname and
+this www page is not reachable from a browser at all.
+"""
 
 import frappe
-from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import oauth
-from alaiy_os_connector_amazon_sp_api.spapi import auth
-from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 
 no_cache = 1
 
@@ -16,57 +19,15 @@ def get_context(context):
 	oauth.require_oauth_role()
 	args = frappe.form_dict
 
-	# Amazon can redirect back with an error instead of a code.
-	if args.get("error"):
-		context.success = False
-		context.message = args.get("error_description") or args.get("error")
-		return context
+	result = oauth.complete_authorization(
+		args.get("spapi_oauth_code"),
+		args.get("state"),
+		selling_partner_id=args.get("selling_partner_id"),
+		error=args.get("error"),
+		error_description=args.get("error_description"),
+	)
 
-	oauth.validate_state(args.get("state"))
-
-	code = args.get("spapi_oauth_code")
-	selling_partner_id = args.get("selling_partner_id")
-	if not code:
-		context.success = False
-		context.message = _("No authorization code returned by Amazon.")
-		return context
-
-	# Exchange the one-time code for a refresh token.
-	try:
-		token_payload = auth.exchange_authorization_code(code, oauth.redirect_uri())
-	except auth.LwaError as e:
-		context.success = False
-		context.message = _("Token exchange failed: {0}").format(e.message)
-		return context
-
-	refresh_token = token_payload.get("refresh_token")
-	if not refresh_token:
-		context.success = False
-		context.message = _("Amazon did not return a refresh token.")
-		return context
-
-	connection = oauth.store_refresh_token(refresh_token, selling_partner_id)
-
-	# Verify with a role-free preflight. Keep the token even if it fails — the
-	# authorization succeeded, and a 403 here is usually a fixable region /
-	# beta / role problem. We mark the connection `error` with an actionable
-	# message so the operator can fix config and retry with "Test Connection"
-	# instead of re-doing the whole OAuth dance.
-	try:
-		SpApiClient(connection).preflight()
-	except SpApiError as e:
-		message = describe_forbidden(e, role_free=True) if e.is_forbidden() else e.message
-		connection.set_status("error", message)
-		# This is a GET request; Frappe rolls back on GET unless we commit, which
-		# would drop the stored token, the error status, and the SP-API Log rows.
-		frappe.db.commit()
-		context.success = False
-		context.message = message
-		return context
-
-	connection.set_status("connected", "Connected and verified")
-	frappe.db.commit()  # persist across the GET-request rollback (see above)
-	context.success = True
-	context.message = _("Amazon account connected successfully.")
-	context.selling_partner_id = selling_partner_id
+	context.success = result["success"]
+	context.message = result["message"]
+	context.selling_partner_id = result["selling_partner_id"]
 	return context

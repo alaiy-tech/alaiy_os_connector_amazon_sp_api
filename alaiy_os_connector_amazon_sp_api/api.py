@@ -13,6 +13,7 @@ import frappe
 from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
+from alaiy_os_connector_amazon_sp_api import oauth
 from alaiy_os_connector_amazon_sp_api.spapi import health, listings, product_types, reconcile
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
@@ -54,9 +55,15 @@ def get_connection_status():
 
 @frappe.whitelist()
 def get_config_status():
-	"""Report which site_config credential keys are set (no secret values)."""
+	"""Report which site_config credential keys are set (no secret values).
+
+	Carries `redirect_uri` too — the URL Amazon must have registered for this
+	deployment. It is derived from `app_url`, so it is also the thing that decides
+	whether the consent redirect lands on the OS's own callback screen or on
+	Frappe's www page, and a screen showing it can say which.
+	"""
 	_require_manager()
-	return config.get_config_status()
+	return {**config.get_config_status(), "redirect_uri": oauth.redirect_uri()}
 
 
 @frappe.whitelist()
@@ -65,6 +72,45 @@ def get_connect_url():
 	_require_manager()
 	config.assert_ready()
 	return {"url": "/amazon-oauth/start"}
+
+
+@frappe.whitelist()
+def get_consent_url():
+	"""Issue the OAuth state and return Amazon's consent URL to send the browser to.
+
+	What `/amazon-oauth/start` does, as data instead of a redirect — for the OS
+	frontend, which cannot reach that www page: it is served from the site's
+	hostname, which in that arrangement belongs to the frontend, and the frontend
+	only proxies `/api` through to Frappe.
+
+	The URL carries no secret. The app id in it is public (it is on the consent
+	screen), and `state` is single-use, session-bound and worthless to anyone who
+	is not already this session.
+	"""
+	_require_manager()
+	state = oauth.issue_state()  # consent_url asserts the app credentials are set
+	return {"url": oauth.consent_url(state), "redirect_uri": oauth.redirect_uri()}
+
+
+@frappe.whitelist(methods=["POST"])
+def complete_oauth(
+	spapi_oauth_code=None, state=None, selling_partner_id=None, error=None, error_description=None
+):
+	"""Finish the consent round trip on behalf of the OS's callback screen.
+
+	Same flow, same outcomes as the www callback page — see
+	`oauth.complete_authorization`, which both go through. The arguments are
+	Amazon's own query parameters, forwarded verbatim by whichever of the two
+	Amazon redirected to.
+	"""
+	_require_manager()
+	return oauth.complete_authorization(
+		spapi_oauth_code,
+		state,
+		selling_partner_id=selling_partner_id,
+		error=error,
+		error_description=error_description,
+	)
 
 
 @frappe.whitelist()
