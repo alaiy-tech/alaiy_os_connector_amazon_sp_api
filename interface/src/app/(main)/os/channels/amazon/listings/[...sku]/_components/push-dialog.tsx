@@ -15,7 +15,7 @@ import { amazonErrorMessage, compareListing, updateListing } from "@/lib/amazon/
 import { amazonMoney, conditionLabel } from "@/lib/amazon/format";
 import type { AmazonCompareResult, AmazonDesiredListing, AmazonPushField } from "@/lib/amazon/types";
 
-import { IssueSeverityBadge } from "../../../_components/status-badge";
+import { IssueSeverityBadge } from "@/components/amazon/status-badge";
 
 const FIELD_LABELS: Record<AmazonPushField, string> = {
   title: "Title",

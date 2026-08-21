@@ -14,7 +14,7 @@ export default function Page() {
         subtitle="Amazon's own metrics for this seller account, as of the last sync, with the recent buyer feedback behind them."
         action={
           <Button variant="outline" size="sm" asChild>
-            <Link href="/os/channels/amazon/settings">
+            <Link href="/os/settings/connectors/amazon_sp_api">
               <Settings /> Amazon settings
             </Link>
           </Button>

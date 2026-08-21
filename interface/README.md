@@ -12,9 +12,11 @@ src/
 │   ├── (main)/os/channels/amazon/
 │   │   ├── listings/            the register: filters, bulk sync, reconcile
 │   │   ├── listings/[...sku]/    one SKU: offer, content, issues, family, push
-│   │   ├── health/              account-health metrics + recent seller feedback
-│   │   └── settings/            the seller account, app credentials, order defaults
+│   │   └── health/              account-health metrics + recent seller feedback
+│   ├── (main)/os/settings/connectors/amazon_sp_api/
+│   │                            the seller account, app credentials, order defaults
 │   └── amazon-oauth/callback/   where Amazon's consent screen returns to
+├── components/amazon/           shared by screens in both trees above
 └── lib/amazon/                  the API layer over this app's whitelisted methods
 ```
 
@@ -30,6 +32,12 @@ The routes live under `/os/channels/amazon/` even so, because the group is one
 connector's name and the URL space should not be: the next channel connector
 (Shopify, Unicommerce — neither ships an `interface/` yet) lands beside this one
 at `/os/channels/<its own>/` without anything here moving.
+
+Settings is the exception, and is not in this group at all. It sits at
+`/os/settings/connectors/amazon_sp_api`, the namespace the base owns and indexes
+under Settings → Connectors, so this connector is configured from the same place
+as every other one. The screen is still this app's — those fields need Amazon's
+vocabulary — which is why the base exposes a generic API and not a generic form.
 
 ## The register is local
 

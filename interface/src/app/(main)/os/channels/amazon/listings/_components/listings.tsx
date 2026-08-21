@@ -44,8 +44,8 @@ import {
   MarketplacePicker,
   marketplaceName,
   useMarketplaces,
-} from "../../_components/marketplace-picker";
-import { ListingStatusBadge } from "../../_components/status-badge";
+} from "@/components/amazon/marketplace-picker";
+import { ListingStatusBadge } from "@/components/amazon/status-badge";
 
 const PAGE_SIZE = 20;
 const ANY_STATUS = "__any__";

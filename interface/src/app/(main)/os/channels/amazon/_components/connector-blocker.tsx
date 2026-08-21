@@ -7,7 +7,7 @@ import { Button } from "@alaiy-os/ui/button";
 import { RefreshCw, Settings, TriangleAlert } from "lucide-react";
 
 /** This connector's own settings screen — no Desk, no second UI to learn. */
-export const AMAZON_SETTINGS_HREF = "/os/channels/amazon/settings";
+export const AMAZON_SETTINGS_HREF = "/os/settings/connectors/amazon_sp_api";
 export const AMAZON_LISTINGS_HREF = "/os/channels/amazon/listings";
 export const AMAZON_HEALTH_HREF = "/os/channels/amazon/health";
 

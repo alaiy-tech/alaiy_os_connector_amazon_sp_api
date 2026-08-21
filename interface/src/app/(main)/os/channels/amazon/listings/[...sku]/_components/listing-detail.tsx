@@ -54,9 +54,9 @@ import {
 } from "@/lib/amazon/types";
 
 import { ConnectorBlocker } from "../../../_components/connector-blocker";
-import { marketplaceName, useMarketplaces } from "../../../_components/marketplace-picker";
-import { IssueSeverityBadge, ListingStatusBadge } from "../../../_components/status-badge";
-import { LinkField } from "../../../settings/_components/link-field";
+import { marketplaceName, useMarketplaces } from "@/components/amazon/marketplace-picker";
+import { IssueSeverityBadge, ListingStatusBadge } from "@/components/amazon/status-badge";
+import { LinkField } from "@/components/amazon/link-field";
 import { ImageListEditor } from "./image-list-editor";
 import { PushDialog } from "./push-dialog";
 import { StringListEditor } from "./string-list-editor";

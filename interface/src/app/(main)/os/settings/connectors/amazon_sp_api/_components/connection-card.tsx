@@ -19,11 +19,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@alaiy-os/ui/spinner";
 import { Plug, PlugZap, Unplug } from "lucide-react";
 
+import { MarketplacePicker } from "@/components/amazon/marketplace-picker";
+import { ConnectionStatusBadge } from "@/components/amazon/status-badge";
 import { amazonDateTime, textOr } from "@/lib/amazon/format";
 import type { AmazonConnectionStatus } from "@/lib/amazon/types";
-
-import { MarketplacePicker } from "../../_components/marketplace-picker";
-import { ConnectionStatusBadge } from "../../_components/status-badge";
 
 /** `Amazon Connection.region` — the three SP-API region groups. */
 const REGIONS = [
