@@ -98,10 +98,13 @@ scheduler_events = {
 		"0 */6 * * *": [
 			"alaiy_os_connector_amazon_sp_api.tasks.reconcile_listings",
 		],
-		# Every 30 minutes: pull orders updated since the watermark. Cheap when
+		# Every 10 minutes: pull orders updated since the watermark. Cheap when
 		# idle (one getOrders call returning nothing), so the cadence is set by
-		# how stale an order may be, not by API cost.
-		"*/30 * * * *": [
+		# how stale an order may be, not by API cost. Each run re-reads
+		# ORDERS_SYNC_OVERLAP (5 min) behind the watermark, which stays well
+		# inside this interval - so the windows still meet without a gap and
+		# without a run spending most of its time re-reading the last one.
+		"*/10 * * * *": [
 			"alaiy_os_connector_amazon_sp_api.tasks.sync_orders",
 		],
 	},
