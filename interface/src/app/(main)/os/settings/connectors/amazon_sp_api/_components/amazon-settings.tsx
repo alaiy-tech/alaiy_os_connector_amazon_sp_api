@@ -12,6 +12,7 @@ import { Spinner } from "@alaiy-os/ui/spinner";
 import { CircleCheck, CircleX } from "lucide-react";
 import { toast } from "sonner";
 
+import { ANY_MARKETPLACE } from "@/components/amazon/marketplace-picker";
 import {
   amazonErrorMessage,
   disconnectAmazon,
@@ -24,7 +25,6 @@ import {
 } from "@/lib/amazon/api";
 import type { AmazonConfigStatus, AmazonConnectionStatus, AmazonOrdersSyncStatus } from "@/lib/amazon/types";
 
-import { ANY_MARKETPLACE } from "../../_components/marketplace-picker";
 import { AppCredentialsCard } from "./app-credentials-card";
 import { ConnectionCard, type ConnectionForm } from "./connection-card";
 import { OrderDefaultsCard, type OrdersForm } from "./order-defaults-card";

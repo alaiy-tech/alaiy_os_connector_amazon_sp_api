@@ -30,8 +30,8 @@ import {
   MarketplacePicker,
   marketplaceName,
   useMarketplaces,
-} from "../../_components/marketplace-picker";
-import { HealthStatusBadge } from "../../_components/status-badge";
+} from "@/components/amazon/marketplace-picker";
+import { HealthStatusBadge } from "@/components/amazon/status-badge";
 
 /**
  * Amazon's own verdict on this seller account.

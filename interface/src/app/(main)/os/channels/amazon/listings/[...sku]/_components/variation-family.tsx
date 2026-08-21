@@ -14,7 +14,7 @@ import { fetchVariationFamily } from "@/lib/amazon/api";
 import { amazonCount, amazonMoney, textOr } from "@/lib/amazon/format";
 import type { AmazonVariationFamily } from "@/lib/amazon/types";
 
-import { ListingStatusBadge } from "../../../_components/status-badge";
+import { ListingStatusBadge } from "@/components/amazon/status-badge";
 
 /**
  * The rest of this listing's variation family, if it is in one.

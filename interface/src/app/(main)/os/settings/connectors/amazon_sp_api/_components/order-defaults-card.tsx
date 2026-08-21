@@ -9,10 +9,9 @@ import { Input } from "@alaiy-os/ui/input";
 import { Label } from "@alaiy-os/ui/label";
 import { CircleAlert, RefreshCw, ScrollText } from "lucide-react";
 
+import { LinkField } from "@/components/amazon/link-field";
 import { amazonCount, amazonDateTime } from "@/lib/amazon/format";
 import type { AmazonOrdersSyncStatus } from "@/lib/amazon/types";
-
-import { LinkField } from "./link-field";
 
 export interface OrdersForm {
   customer: string;

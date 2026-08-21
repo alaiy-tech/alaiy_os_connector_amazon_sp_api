@@ -14,7 +14,7 @@ export default function Page() {
         subtitle="The register of managed listings, as of the last sync. Open one to see what Amazon holds and push changes to it."
         action={
           <Button variant="outline" size="sm" asChild>
-            <Link href="/os/channels/amazon/settings">
+            <Link href="/os/settings/connectors/amazon_sp_api">
               <Settings /> Amazon settings
             </Link>
           </Button>
