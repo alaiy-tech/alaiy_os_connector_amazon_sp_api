@@ -267,7 +267,7 @@ cleanly when the connection is not configured.
 | Daily | `sync_health` | Refresh account-health metrics + feedback for the primary marketplace. |
 | Hourly | `refresh_connection_status` | Ping preflight and update `last_status`. |
 | Every 6h | `reconcile_listings` | Reconcile the full catalog's status/price/quantity from the Merchant Listings report. |
-| Every 30m | `sync_orders` | Pull orders updated since the watermark into Sales Orders. Dormant until a Default Customer is set. |
+| Every 10m | `sync_orders` | Pull orders updated since the watermark into Sales Orders. Dormant until a Default Customer is set. |
 
 On a scheduled failure, users with the **Amazon Manager** role receive a
 best-effort email alert.

@@ -41,10 +41,11 @@ def reconcile_listings():
 
 
 def sync_orders():
-	"""Every 30m: pull orders updated since the watermark into Sales Orders.
+	"""Every 10m: pull orders updated since the watermark into Sales Orders.
 
 	No-ops when no default customer is configured — an unconfigured site would
-	otherwise email its managers every half hour about a feature it isn't using.
+	otherwise email its managers every ten minutes about a feature it isn't
+	using.
 	"""
 	if not _connection_ready():
 		return
