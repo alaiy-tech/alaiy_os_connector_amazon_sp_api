@@ -11,6 +11,7 @@
   "title",
   "asin",
   "product_type",
+  "brand",
   "product",
   "column_break_ident",
   "marketplace",
@@ -68,6 +69,14 @@
    "in_standard_filter": 1,
    "label": "Product Type",
    "description": "Amazon's product type for this listing, e.g. SHIRT or LUGGAGE. Picked by Search Catalog before publishing an offer, and refreshed from the summary on every sync. Every write to Amazon has to declare it, so a row without one cannot be updated."
+  },
+  {
+   "fieldname": "brand",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "in_standard_filter": 1,
+   "label": "Brand",
+   "description": "The brand Amazon holds for this listing. Read from our own `brand` attribute when this seller owns the ASIN's content, and from the catalog entry otherwise. Sync-owned and never pushed: brand is set when the ASIN is created and Amazon does not accept it as an offer update."
   },
   {
    "fieldname": "product",
@@ -257,7 +266,7 @@
    "link_fieldname": "parent_listing"
   }
  ],
- "modified": "2026-08-10 00:00:00.000000",
+ "modified": "2026-08-25 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Product Listing",

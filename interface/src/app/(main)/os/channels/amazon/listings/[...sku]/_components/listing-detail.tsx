@@ -43,7 +43,7 @@ import {
   setListingProduct,
   syncListing,
 } from "@/lib/amazon/api";
-import { amazonDateTime, conditionLabel } from "@/lib/amazon/format";
+import { amazonDateTime, conditionLabel, textOr } from "@/lib/amazon/format";
 import {
   type AmazonDesiredListing,
   type AmazonListingDoc,
@@ -249,7 +249,7 @@ export function ListingDetail({ sku }: { sku: string }) {
         </CardHeader>
 
         <CardContent className="space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <Field label="ASIN">
               {doc.asin ? (
                 <span className="flex items-center gap-1">
@@ -267,6 +267,7 @@ export function ListingDetail({ sku }: { sku: string }) {
                 <span className="text-destructive text-xs">Missing — a push will be rejected</span>
               )}
             </Field>
+            <Field label="Brand">{textOr(doc.brand)}</Field>
             <Field label="Marketplace">{marketplaceName(marketplaces, doc.marketplace)}</Field>
             <Field label="Last synced">{amazonDateTime(doc.last_synced_at)}</Field>
           </div>

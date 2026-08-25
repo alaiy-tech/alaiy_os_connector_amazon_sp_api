@@ -107,6 +107,8 @@ export interface AmazonListingRow {
   title?: string | null;
   asin?: string | null;
   product_type?: string | null;
+  /** Read from Amazon and never pushed back — the ASIN's owner sets it. */
+  brand?: string | null;
   /** The catalog `Item` this SKU books against. Empty is the thing to fix. */
   product?: string | null;
   marketplace?: string | null;
@@ -176,6 +178,7 @@ export interface AmazonRemoteSnapshot extends AmazonDesiredListing {
   sku?: string;
   asin?: string | null;
   product_type?: string | null;
+  brand?: string | null;
   listing_status?: string | null;
   currency?: string | null;
   fulfillment_channel?: string | null;

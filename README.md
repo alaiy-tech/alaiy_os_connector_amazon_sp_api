@@ -71,6 +71,25 @@ a variation parent both come back without one. Keep it: Amazon rejects any
 create or update that does not declare a product type, so a row that loses it
 can no longer be pushed.
 
+#### Brand
+
+Each listing also stores the **Brand** Amazon holds for the SKU. It is read-only
+and never pushed: brand belongs to whoever created the ASIN, and Amazon does not
+accept it as an offer update.
+
+It is filled from the seller's own `brand` attribute where this seller owns the
+ASIN's content, and from the ASIN's catalog entry otherwise — which is the usual
+case, so it lands on the sync passes that reach the catalog (a listing sync, and
+the reconcile's catalog enrichment). Picking an ASIN in Search Catalog seeds it
+straight away. Like the rest of the content, a sync only ever fills it and never
+blanks it, so a run that could not reach the catalog leaves the value alone.
+
+Existing rows fill in on their next sync; there is no backfill patch because the
+value was never stored anywhere locally — the Listings summary this connector
+keeps in `raw_summary` carries no brand, and neither does the Merchant Listings
+report. Brand is a standard filter on the register for the same reason product
+type is: it is how an operator narrows a catalog of thousands to one label.
+
 #### Variation families
 
 Each listing records where it sits in its Amazon variation family, read from the

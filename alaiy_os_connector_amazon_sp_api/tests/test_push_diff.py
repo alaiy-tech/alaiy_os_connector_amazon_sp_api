@@ -235,6 +235,17 @@ class TestRemoteSnapshotParts(UnitTestCase):
 		self.assertEqual(content["bullet_points"], [])
 		self.assertEqual(content["images"], [])
 
+	def test_brand_is_never_pushed(self):
+		"""Brand is read from Amazon, never written back to it.
+
+		It belongs to whoever created the ASIN, and an offer update that carried
+		it would be rejected — so a row whose brand differs from the catalog's
+		must still produce no change, however the operator got that value there.
+		"""
+		remote = listings._content_from_item({}, {}, {"brand": "Catalog Brand"})
+		self.assertEqual(remote["brand"], "Catalog Brand")
+		self.assertEqual(listings.diff_from_remote(remote, {"brand": "Something Else"}), {})
+
 	def test_an_offer_only_row_in_sync_with_the_catalog_pushes_nothing(self):
 		"""The regression the whole precedence rule exists for.
 
