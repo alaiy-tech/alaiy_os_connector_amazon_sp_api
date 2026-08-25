@@ -153,6 +153,7 @@ class TestCatalogContent(UnitTestCase):
 				"product_description": [_attr("<p>Soft cotton.</p>")],
 				"bullet_point": [_attr("Breathable"), _attr("Machine washable")],
 				"generic_keyword": [_attr("shirt cotton")],
+				"brand": [_attr("Ours")],
 			},
 			"images": [
 				{
@@ -164,6 +165,7 @@ class TestCatalogContent(UnitTestCase):
 		}
 		content = catalog.content_from_item(item, MP)
 		self.assertEqual(content["title"], "Cotton Shirt")
+		self.assertEqual(content["brand"], "Ours")
 		self.assertEqual(content["description"], "<p>Soft cotton.</p>")
 		self.assertEqual(content["bullets"], ["Breathable", "Machine washable"])
 		self.assertEqual(content["keywords"], ["shirt cotton"])
@@ -177,12 +179,16 @@ class TestCatalogContent(UnitTestCase):
 				{
 					"marketplaceId": MP.marketplace_id,
 					"itemName": "Summary Name",
+					"brand": "Summary Brand",
 					"mainImage": {"link": "thumb.jpg"},
 				}
 			],
 		}
 		content = catalog.content_from_item(item, MP)
 		self.assertEqual(content["title"], "Summary Name")
+		# The summary states the brand outright, which is the only place it is
+		# readable for an ASIN whose attributes this seller does not contribute.
+		self.assertEqual(content["brand"], "Summary Brand")
 		self.assertEqual(content["images"], [{"url": "thumb.jpg", "is_main": True}])
 		self.assertIsNone(content["description"])
 		self.assertEqual(content["bullets"], [])
@@ -199,6 +205,7 @@ class TestApplyContentPrecedence(UnitTestCase):
 
 	CATALOG_CONTENT = {
 		"title": "Catalog Title",
+		"brand": "Catalog Brand",
 		"description": "Catalog description",
 		"bullets": ["Catalog bullet"],
 		"keywords": ["catalog keyword"],
@@ -215,6 +222,7 @@ class TestApplyContentPrecedence(UnitTestCase):
 			catalog_content=self.CATALOG_CONTENT,
 		)
 		self.assertEqual(row.title, "Catalog Title")
+		self.assertEqual(row.brand, "Catalog Brand")
 		self.assertEqual(row.description, "Catalog description")
 		self.assertEqual([b.bullet for b in row.bullet_points], ["Catalog bullet"])
 		self.assertEqual([k.keyword for k in row.keywords], ["catalog keyword"])
@@ -230,6 +238,7 @@ class TestApplyContentPrecedence(UnitTestCase):
 				"product_description": [_attr("Our description")],
 				"bullet_point": [_attr("Our bullet")],
 				"generic_keyword": [_attr("our keyword")],
+				"brand": [_attr("Our Brand")],
 				"main_product_image_locator": [
 					{"marketplace_id": MP.marketplace_id, "media_location": "ours-main.jpg"}
 				],
@@ -241,6 +250,7 @@ class TestApplyContentPrecedence(UnitTestCase):
 		row = _listing_row()
 		listings._apply_content(row, MP, item, {}, catalog_content=self.CATALOG_CONTENT)
 		self.assertEqual(row.title, "Our Title")
+		self.assertEqual(row.brand, "Our Brand")
 		self.assertEqual(row.description, "Our description")
 		self.assertEqual([b.bullet for b in row.bullet_points], ["Our bullet"])
 		self.assertEqual([k.keyword for k in row.keywords], ["our keyword"])
@@ -257,6 +267,7 @@ class TestApplyContentPrecedence(UnitTestCase):
 		"""
 		row = _listing_row(
 			title="Existing Title",
+			brand="Existing Brand",
 			description="Existing description",
 			bullet_points=[{"bullet": "Existing bullet"}],
 			keywords=[{"keyword": "existing keyword"}],
@@ -266,6 +277,10 @@ class TestApplyContentPrecedence(UnitTestCase):
 			row, MP, {"attributes": self.OFFER_ONLY_ATTRIBUTES}, {}, catalog_content=None
 		)
 		self.assertEqual(row.title, "Existing Title")
+		# Brand is the field most exposed to this: it only ever arrives from the
+		# catalog for an offer-only listing, and fetch_content swallows a failed
+		# batch, so "no answer this run" is a routine outcome rather than an error.
+		self.assertEqual(row.brand, "Existing Brand")
 		self.assertEqual(row.description, "Existing description")
 		self.assertEqual([b.bullet for b in row.bullet_points], ["Existing bullet"])
 		self.assertEqual([k.keyword for k in row.keywords], ["existing keyword"])
@@ -274,9 +289,10 @@ class TestApplyContentPrecedence(UnitTestCase):
 	def test_an_empty_payload_never_blanks_what_the_row_already_has(self):
 		# The bulk path used to guard this case with an early return; the guard is
 		# gone, so assert the behaviour it protected directly.
-		row = _listing_row(title="Existing Title", description="Existing description")
+		row = _listing_row(title="Existing Title", brand="Existing Brand", description="Existing description")
 		listings._apply_content(row, MP, {}, {}, catalog_content=None)
 		self.assertEqual(row.title, "Existing Title")
+		self.assertEqual(row.brand, "Existing Brand")
 		self.assertEqual(row.description, "Existing description")
 
 	def test_summary_main_image_is_the_last_resort(self):
@@ -373,6 +389,7 @@ class TestReconcileCatalogEnrichment(UnitTestCase):
 
 	CATALOG = {
 		"title": "Real Product Title",
+		"brand": "Real Brand",
 		"description": "Real description",
 		"bullets": ["Breathable"],
 		"keywords": ["shirt"],
@@ -394,6 +411,9 @@ class TestReconcileCatalogEnrichment(UnitTestCase):
 		reconcile._apply_catalog(row, MP, self.CATALOG)
 		reconcile._seed_content(row, self.REPORT_ROW)
 		self.assertEqual(row.title, "Real Product Title")
+		# The report has no brand column at all, so the catalog pass is the only
+		# thing that can fill it for the rows past the Listings API's ~1000 cap.
+		self.assertEqual(row.brand, "Real Brand")
 		self.assertEqual(row.description, "Real description")
 		self.assertEqual([i.image_url for i in row.images], ["real.jpg"])
 		self.assertEqual([b.bullet for b in row.bullet_points], ["Breathable"])

@@ -360,6 +360,9 @@ function render_catalog_results(frm, dialog, items) {
 			frm.refresh_field("images");
 		}
 		if (it.product_type) frm.set_value("product_type", it.product_type);
+		// The search results already carry the ASIN's brand, so a row published
+		// from here shows it without waiting for the first sync to reach the catalog.
+		if (it.brand) frm.set_value("brand", it.brand);
 		if (dialog.get_value("marketplace")) frm.set_value("marketplace", dialog.get_value("marketplace"));
 		dialog.hide();
 		frappe.show_alert({ message: __("Selected {0}", [it.asin]), indicator: "green" });

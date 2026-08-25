@@ -207,6 +207,7 @@ const LISTING_ROW_FIELDS = [
   "title",
   "asin",
   "product_type",
+  "brand",
   "product",
   "marketplace",
   "listing_status",

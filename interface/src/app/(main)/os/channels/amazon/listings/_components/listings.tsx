@@ -385,6 +385,7 @@ function ListingTableRow({ row, marketplaceLabel }: { row: AmazonListingRow; mar
               variation parent
             </Badge>
           )}
+          {row.brand ? <Badge variant="outline">{row.brand}</Badge> : null}
           {row.product_type ? (
             <Badge variant="outline">{row.product_type}</Badge>
           ) : (

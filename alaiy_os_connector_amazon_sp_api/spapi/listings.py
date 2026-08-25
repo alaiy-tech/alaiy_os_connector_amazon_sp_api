@@ -742,6 +742,7 @@ def _content_from_item(item, summary, catalog_content=None):
 
 	return {
 		"title": _own_attr(attributes, "item_name") or catalog_content.get("title"),
+		"brand": _own_attr(attributes, "brand") or catalog_content.get("brand"),
 		"description": _own_attr(attributes, "product_description")
 		or catalog_content.get("description"),
 		"bullet_points": _own_attr_values(attributes, "bullet_point")
@@ -755,7 +756,7 @@ def _content_from_item(item, summary, catalog_content=None):
 
 
 def _apply_content(row, mp, item, summary, catalog_content=None):
-	"""Fill title/description/bullets/keywords/images on the register row.
+	"""Fill title/brand/description/bullets/keywords/images on the register row.
 
 	Whatever _content_from_item could not find, the row keeps. That fallback is
 	the important one: an offer-only listing carries no content attributes at
@@ -768,6 +769,13 @@ def _apply_content(row, mp, item, summary, catalog_content=None):
 
 	if content["title"]:
 		row.title = content["title"]
+
+	# Same fill-only rule, and it bites harder here: brand comes back on the
+	# catalog entry rather than the seller's own attributes for every offer-only
+	# listing, so a sync that could not reach the catalog (a failed batch, or an
+	# ASIN we have not resolved yet) must leave the value already on the row.
+	if content["brand"]:
+		row.brand = content["brand"]
 
 	if content["description"]:
 		row.description = content["description"]

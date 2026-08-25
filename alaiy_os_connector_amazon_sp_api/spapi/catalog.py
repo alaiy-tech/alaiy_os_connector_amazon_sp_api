@@ -19,7 +19,7 @@ than one per SKU.
 
 The seller's own attributes still win where they exist (see
 listings._apply_content); this is the fallback that makes offer-only listings
-show their title, description, bullets, keywords and images at all.
+show their title, brand, description, bullets, keywords and images at all.
 """
 
 import frappe
@@ -133,7 +133,7 @@ def _variation_from(item, marketplace_id):
 def content_from_item(item, mp):
 	"""Normalise one catalog item into the fields of an Amazon Product Listing.
 
-	Content keys (title/description/bullets/keywords/images) may each be
+	Content keys (title/brand/description/bullets/keywords/images) may each be
 	None/empty — an ASIN can legitimately have no keywords — and the caller must
 	not write those gaps over values it already has.
 
@@ -148,6 +148,10 @@ def content_from_item(item, mp):
 
 	titles = _attr_values(attributes, "item_name", marketplace_id, language)
 	descriptions = _attr_values(attributes, "product_description", marketplace_id, language)
+	# Brand is one of the few things the summary states outright, so it is
+	# readable even when includedData=attributes comes back thin — which is the
+	# usual case for an ASIN this seller does not own.
+	brands = _attr_values(attributes, "brand", marketplace_id, language)
 
 	images = _images_from(item, marketplace_id)
 	if not images:
@@ -158,6 +162,7 @@ def content_from_item(item, mp):
 
 	return {
 		"title": (titles[0] if titles else None) or summary.get("itemName") or None,
+		"brand": (brands[0] if brands else None) or summary.get("brand") or None,
 		"description": descriptions[0] if descriptions else None,
 		"bullets": _attr_values(attributes, "bullet_point", marketplace_id, language),
 		"keywords": _attr_values(attributes, "generic_keyword", marketplace_id, language),
