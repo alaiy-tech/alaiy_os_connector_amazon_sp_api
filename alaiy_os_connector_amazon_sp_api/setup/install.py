@@ -2,18 +2,24 @@
 # For license information, please see license.txt
 """AlaiyOS integration: register the connector so the core can surface it.
 
-One integration point with the core (`alaiy_os`): the OS Connector Registry row (from
-connector_meta). Off that row the core builds everything else — the Connectors
+Two integration points with the core (`alaiy_os`), both idempotent upserts on the
+same schedule. The OS Connector Registry row (from connector_meta) is what makes the
+connector visible: off that row the core builds everything else — the Connectors
 panel in OS Settings, and this connector's own top-level section in the main
 "OS" Workspace Sidebar, which it always places before the trailing Settings
 item. The section's child links come from the app's own
 `alaiy_os_sidebar_connector_items` hook (see hooks.py), so nothing here
 touches the Workspace Sidebar doc directly.
+
+The OS Agent Registry row (from pack_meta) is what makes it *askable*: one pack whose
+tool rows name this app's whitelisted reads as dotted-path handlers, which the core's
+agent engine hydrates and runs. Registering it is the same shape as registering the
+connector, so both live here.
 """
 
 import frappe
 
-from alaiy_os_connector_amazon_sp_api import install
+from alaiy_os_connector_amazon_sp_api import install, pack_meta
 from alaiy_os_connector_amazon_sp_api.connector_meta import connector_meta
 
 
@@ -21,11 +27,13 @@ from alaiy_os_connector_amazon_sp_api.connector_meta import connector_meta
 def after_install():
 	install.ensure_base_data()
 	sync_connector_registry()
+	sync_agent_registry()
 
 
 def after_migrate():
 	install.ensure_base_data()
 	sync_connector_registry()
+	sync_agent_registry()
 
 
 def sync_connector_registry():
@@ -52,6 +60,74 @@ def sync_connector_registry():
 
 	frappe.db.commit()
 	_refresh_alaiy_os_sidebar()
+
+
+# --- agent pack --------------------------------------------------------------
+# Fields written from the manifest on every reconcile — except these. `is_enabled`
+# is admin-controlled: it is toggled in the Desk form (or through
+# alaiy_os.api.agent_settings) and has to survive a migrate, so it is only ever set
+# by the DocType's own default on the first insert. Re-asserting the manifest here
+# would switch a pack an operator turned off back on, silently, on the next migrate.
+_AGENT_RUNTIME_FIELDS = {"is_enabled"}
+
+# Manifest keys that are not plain fields on the row.
+_AGENT_NON_REGISTRY_FIELDS = {"agent_id", "tools"}
+
+
+def sync_agent_registry():
+	"""Upsert this connector's OS Agent Registry pack. Safe to call repeatedly.
+
+	The manifest is pack_meta.py; this only writes it, so editing a tool description
+	or the prompt and running `bench migrate` is the whole reconcile loop.
+	"""
+	if not frappe.db.exists("DocType", "OS Agent Registry"):
+		# Core not installed yet, or predates the agent engine.
+		return
+
+	meta = pack_meta.build_pack_meta()
+	agent_id = meta["agent_id"]
+
+	if frappe.db.exists("OS Agent Registry", agent_id):
+		doc = frappe.get_doc("OS Agent Registry", agent_id)
+	else:
+		doc = frappe.new_doc("OS Agent Registry")
+		doc.agent_id = agent_id
+
+	for key, value in meta.items():
+		if key in _AGENT_NON_REGISTRY_FIELDS or key in _AGENT_RUNTIME_FIELDS:
+			continue
+		doc.set(key, value)
+
+	doc.set("tools", [pack_meta.as_registry_tool(tool) for tool in meta["tools"]])
+
+	# save() inserts when new. The OS Agent Tool child controller validates every
+	# handler dotted path and every parameters_schema here, so a typo in the
+	# manifest fails at migrate with the tool named, rather than mid-run.
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+
+
+def unregister_agent():
+	"""Drop the pack's registry row on uninstall, keeping its run history.
+
+	Without this the row outlives the app: its handlers stop importing, so alaiy_os's
+	own migrate check (check_dotted_path_handlers) marks every tool broken and the
+	pack sits in the Desk advertising an app that is gone.
+
+	force=True because every past OS Agent Run links to the agent, so the default
+	link check refuses the delete and the uninstall dies on LinkExistsError the moment
+	the pack has been run once. alaiy_os lists OS Agent Run in
+	`ignore_links_on_delete` for exactly that reason; the runs keep their agent id as
+	recorded history and simply stop pointing at a live row.
+	"""
+	if not frappe.db.exists("DocType", "OS Agent Registry"):
+		return
+
+	if frappe.db.exists("OS Agent Registry", pack_meta.PACK_ID):
+		frappe.delete_doc(
+			"OS Agent Registry", pack_meta.PACK_ID, force=True, ignore_permissions=True
+		)
+	frappe.db.commit()
 
 
 # --- sidebar helpers ---------------------------------------------------------

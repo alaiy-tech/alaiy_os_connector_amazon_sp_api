@@ -22,6 +22,12 @@ required_apps = ["alaiy_os"]
 after_install = "alaiy_os_connector_amazon_sp_api.setup.install.after_install"
 after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 
+# Drop the OS Agent Registry pack on uninstall. Without it the row outlives the app
+# and every one of its handlers stops importing. The OS Connector Registry row is
+# left to the core, which owns that lifecycle; OS Agent Run history is kept on
+# purpose — see setup/install.unregister_agent().
+before_uninstall = "alaiy_os_connector_amazon_sp_api.setup.install.unregister_agent"
+
 # AlaiyOS integration
 # -------------------
 # Child links under this connector's own section in the main OS sidebar.
