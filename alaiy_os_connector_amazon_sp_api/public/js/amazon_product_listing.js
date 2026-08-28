@@ -1,8 +1,14 @@
 // Copyright (c) 2026, Alaiy and contributors
 // For license information, please see license.txt
 //
-// Amazon Product Listing form: push updates to Amazon, end the listing, re-sync, and
+// Amazon Product Listing form: publish to Amazon, end the listing, re-sync, and
 // (for new rows) a catalog-search -> create-offer flow.
+//
+// "Publish" is one button for what used to be two decisions. It previews first
+// (api.preview_publish), and the preview says which the row needs: Amazon has no
+// listing for the SKU, so publishing creates the offer — or it has one, and
+// publishing submits the difference. The operator sees which before anything is
+// submitted, and the same endpoint pair backs the bulk publish on the list view.
 
 frappe.ui.form.on("Amazon Product Listing", {
 	refresh(frm) {
@@ -22,17 +28,19 @@ frappe.ui.form.on("Amazon Product Listing", {
 		}
 
 		if (frm.is_new()) {
-			// New row: help the operator find an ASIN, then publish an offer.
+			// New row: help the operator find an ASIN, then publish an offer. This
+			// one cannot go through api.publish_listing — that publishes a register
+			// row, and this document has never been saved.
 			frm.add_custom_button(__("Search Catalog"), () => amazon_catalog_search(frm));
-			frm.add_custom_button(__("Publish Offer"), () => amazon_publish(frm)).addClass(
+			frm.add_custom_button(__("Publish Offer"), () => amazon_publish_new(frm)).addClass(
 				"btn-primary"
 			);
 			return;
 		}
 
 		frm.add_custom_button(
-			__("Push Update to Amazon"),
-			() => amazon_push_update(frm),
+			__("Publish to Amazon"),
+			() => amazon_publish_row(frm),
 			__("Amazon")
 		).addClass("btn-primary");
 
@@ -144,9 +152,9 @@ function amazon_desired(frm) {
 	};
 }
 
-function amazon_push_update(frm) {
+function amazon_publish_row(frm) {
 	frappe.call({
-		method: "alaiy_os_connector_amazon_sp_api.api.compare_listing",
+		method: "alaiy_os_connector_amazon_sp_api.api.preview_publish",
 		args: {
 			sku: frm.doc.sku,
 			marketplace: frm.doc.marketplace,
@@ -154,7 +162,7 @@ function amazon_push_update(frm) {
 		},
 		freeze: true,
 		freeze_message: __("Checking what Amazon has…"),
-		callback: (r) => amazon_review_push(frm, r.message || {}),
+		callback: (r) => amazon_review_publish(frm, r.message || {}),
 	});
 }
 
@@ -172,10 +180,32 @@ const AMAZON_PUSH_LABELS = {
 // Amazon's value vs the one about to replace it, per field. The operator is the
 // only one who can tell an intended edit from a drift the register introduced,
 // so nothing is submitted until they have seen both sides.
-function amazon_review_push(frm, comparison) {
+function amazon_review_publish(frm, comparison) {
 	const changed = comparison.changed || [];
 	const changes = comparison.changes || {};
 	const remote = comparison.remote || {};
+
+	// Anything Amazon requires and the row has not got. Nothing can be submitted
+	// until these are fixed, so they are the whole message rather than a warning
+	// on a dialog that would only fail.
+	const blockers = comparison.blockers || [];
+	if (blockers.length) {
+		frappe.msgprint({
+			title: __("Not ready to publish"),
+			indicator: "red",
+			message: `<ul>${blockers
+				.map((b) => `<li>${frappe.utils.escape_html(b)}</li>`)
+				.join("")}</ul>`,
+		});
+		return;
+	}
+
+	// Amazon has no listing for this SKU: publishing creates the offer, and there
+	// is no "before" to diff against.
+	if (comparison.exists === false) {
+		amazon_review_create(frm, comparison);
+		return;
+	}
 
 	if (!changed.length) {
 		frappe.msgprint({
@@ -207,13 +237,13 @@ function amazon_review_push(frm, comparison) {
 		: "";
 
 	const d = new frappe.ui.Dialog({
-		title: __("Push Update to Amazon"),
+		title: __("Publish to Amazon"),
 		size: "large",
 		fields: [{ fieldtype: "HTML", fieldname: "diff" }],
-		primary_action_label: __("Push {0} Field(s)", [changed.length]),
+		primary_action_label: __("Publish {0} Field(s)", [changed.length]),
 		primary_action() {
 			d.hide();
-			amazon_send_update(frm, changes);
+			amazon_submit_publish(frm);
 		},
 	});
 	d.fields_dict.diff.$wrapper.html(`
@@ -249,22 +279,93 @@ function amazon_format_value(field, value) {
 	return frappe.utils.escape_html(shown);
 }
 
-function amazon_send_update(frm, changes) {
+// What an offer-only create can carry, and what it cannot: the offer is this
+// seller's, the product content belongs to whoever owns the ASIN. So a create
+// sends price, quantity and condition, and any content on the row is reported as
+// still to come — it goes on the next publish, through the update path, where it
+// is diffed and can be visibly rejected.
+function amazon_review_create(frm, preview) {
+	const warnings = preview.warnings || [];
+	const pending = preview.content_pending || [];
+	const rows = [
+		[__("ASIN"), frm.doc.asin],
+		[__("Product Type"), frm.doc.product_type],
+		[__("Price"), frm.doc.price],
+		[__("Quantity"), frm.doc.quantity],
+		[__("Condition"), frm.doc.condition],
+	]
+		.map(
+			([label, value]) => `<tr><td style="white-space:nowrap;"><b>${label}</b></td>
+				<td>${amazon_format_value(null, value)}</td></tr>`
+		)
+		.join("");
+
+	const d = new frappe.ui.Dialog({
+		title: __("Publish New Offer to Amazon"),
+		size: "large",
+		fields: [{ fieldtype: "HTML", fieldname: "summary" }],
+		primary_action_label: __("Publish Offer"),
+		primary_action() {
+			d.hide();
+			amazon_submit_publish(frm);
+		},
+	});
+	d.fields_dict.summary.$wrapper.html(`
+		<p class="text-muted">${__(
+			"Amazon has no listing for this SKU on this marketplace, so publishing creates the offer."
+		)}</p>
+		<table class="table table-bordered">
+			<thead><tr><th style="width:30%;">${__("Field")}</th><th>${__("Will Be Published")}</th></tr></thead>
+			<tbody>${rows}</tbody>
+		</table>
+		${
+			pending.length
+				? `<p class="text-warning small">${__(
+						"A new offer carries the offer only. {0} stays on this row and reaches Amazon on the next publish, and only where this seller owns the ASIN's content.",
+						[pending.map((f) => __(AMAZON_PUSH_LABELS[f] || f)).join(", ")]
+					)}</p>`
+				: ""
+		}
+		${warnings
+			.map((w) => `<p class="text-warning small">${frappe.utils.escape_html(w)}</p>`)
+			.join("")}`);
+	d.show();
+}
+
+// The submit re-reads Amazon rather than replaying the previewed diff, which is
+// deliberate: the preview can be minutes old by the time it is agreed to, and
+// what should reach Amazon is what Amazon still lacks. It is also the one call
+// that stamps the row's publish outcome, the same way the bulk publish does.
+function amazon_submit_publish(frm) {
 	frappe.call({
-		method: "alaiy_os_connector_amazon_sp_api.api.update_listing",
-		args: { sku: frm.doc.sku, marketplace: frm.doc.marketplace, changes: JSON.stringify(changes) },
+		method: "alaiy_os_connector_amazon_sp_api.api.publish_listing",
+		args: {
+			sku: frm.doc.sku,
+			marketplace: frm.doc.marketplace,
+			desired: JSON.stringify(amazon_desired(frm)),
+		},
 		freeze: true,
-		freeze_message: __("Pushing update to Amazon…"),
+		freeze_message: __("Publishing to Amazon…"),
 		callback: (r) => {
-			const status = r.message.listing_status;
-			const ok = status === "active" || status === "pending";
-			frappe.show_alert({
-				message:
-					status === "pending"
-						? __("Update submitted to Amazon (processing). Sync from Amazon to confirm.")
-						: __("Listing status: {0}", [status]),
-				indicator: ok ? "green" : "orange",
-			});
+			const result = r.message || {};
+			const status = result.listing_status;
+			if (result.action === "unchanged") {
+				frappe.show_alert({
+					message: __("Amazon already had every value on this form."),
+					indicator: "blue",
+				});
+			} else {
+				const ok = status === "active" || status === "pending";
+				frappe.show_alert({
+					message:
+						result.action === "created"
+							? __("Offer created on Amazon (processing). Sync from Amazon to confirm.")
+							: status === "pending"
+								? __("Update submitted to Amazon (processing). Sync from Amazon to confirm.")
+								: __("Listing status: {0}", [status]),
+					indicator: ok ? "green" : "orange",
+				});
+			}
 			frm.reload_doc();
 		},
 	});
@@ -280,7 +381,7 @@ function amazon_sync(frm) {
 	});
 }
 
-function amazon_publish(frm) {
+function amazon_publish_new(frm) {
 	if (!frm.doc.sku || !frm.doc.asin || !frm.doc.marketplace) {
 		frappe.msgprint(__("SKU, ASIN and Marketplace are required to publish an offer."));
 		return;

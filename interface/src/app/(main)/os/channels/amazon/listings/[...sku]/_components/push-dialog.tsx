@@ -11,9 +11,14 @@ import { Spinner } from "@alaiy-os/ui/spinner";
 import { ArrowRight, CircleCheck, CloudUpload, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
-import { amazonErrorMessage, compareListing, updateListing } from "@/lib/amazon/api";
+import { amazonErrorMessage, previewPublish, publishListing } from "@/lib/amazon/api";
 import { amazonMoney, conditionLabel } from "@/lib/amazon/format";
-import type { AmazonCompareResult, AmazonDesiredListing, AmazonPushField } from "@/lib/amazon/types";
+import type {
+  AmazonDesiredListing,
+  AmazonPublishPreview,
+  AmazonPushField,
+  AmazonRemoteSnapshot,
+} from "@/lib/amazon/types";
 
 import { IssueSeverityBadge } from "@/components/amazon/status-badge";
 
@@ -29,7 +34,7 @@ const FIELD_LABELS: Record<AmazonPushField, string> = {
 };
 
 /**
- * Compare, then push — never push blind.
+ * Preview, then publish — never publish blind.
  *
  * The baseline is what Amazon holds right now, read live when this opens, not the
  * register row. The row is only as fresh as the last sync, and a push writes the
@@ -38,9 +43,15 @@ const FIELD_LABELS: Record<AmazonPushField, string> = {
  * answer "what changed on this form?" when the question a push has to answer is
  * "what does Amazon not have yet?".
  *
- * Two calls, two failure modes worth separating: the compare costs one Listings GET
- * and submits nothing, so it is safe to run on every open; the push is the only
- * thing here that changes a live listing.
+ * The preview also answers a question a compare could not: whether Amazon lists
+ * this SKU at all. A row drafted here has never been published, so there is
+ * nothing to diff — publishing *creates* the offer, and the dialog says so and
+ * shows what would be created instead of an empty diff. That is the one case
+ * `compare_listing` could only throw on.
+ *
+ * Two calls, two failure modes worth separating: the preview costs one Listings
+ * GET and submits nothing, so it is safe to run on every open; the publish is the
+ * only thing here that changes a live listing.
  */
 export function PushDialog({
   open,
@@ -59,7 +70,7 @@ export function PushDialog({
   productType?: string | null;
   onPushed: () => void;
 }) {
-  const [comparison, setComparison] = useState<AmazonCompareResult | null>(null);
+  const [comparison, setComparison] = useState<AmazonPublishPreview | null>(null);
   const [comparing, setComparing] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +87,7 @@ export function PushDialog({
     setComparing(true);
     setError(null);
 
-    compareListing(sku, desired, marketplace)
+    previewPublish(sku, desired, marketplace)
       .then((result) => {
         if (!cancelled) setComparison(result);
       })
@@ -92,38 +103,55 @@ export function PushDialog({
     };
   }, [open, sku, marketplace]);
 
+  /**
+   * The submit re-reads Amazon rather than replaying the previewed diff. That is
+   * deliberate: the preview can be minutes old by the time it is agreed to, and
+   * what should reach Amazon is what Amazon still lacks. It is also the call that
+   * stamps the row's publish outcome, exactly as a bulk publish does.
+   */
   async function push() {
     if (!comparison) return;
     setPushing(true);
     try {
-      const result = await updateListing(sku, comparison.changes, marketplace);
+      const result = await publishListing(sku, desired, marketplace);
       const errors = (result.issues ?? []).filter((issue) => (issue.severity ?? "").toUpperCase() === "ERROR");
       if (errors.length) {
-        // update_listing throws on error-severity issues, so reaching here with any
-        // is unexpected — report it rather than claiming success.
+        // publish_listing throws on error-severity issues, so reaching here with
+        // any is unexpected — report it rather than claiming success.
         toast.warning(`Amazon accepted the submission with ${errors.length} error issue(s).`);
+      } else if (result.action === "created") {
+        toast.success("Offer created on Amazon. The row stays pending until a sync confirms it.");
+      } else if (result.action === "unchanged") {
+        toast.info("Amazon already had every value on this form.");
       } else {
         toast.success("Submitted to Amazon. The row stays pending until a sync confirms it.");
       }
       onOpenChange(false);
       onPushed();
     } catch (caught) {
-      toast.error(amazonErrorMessage(caught, "Amazon refused the update."));
+      toast.error(amazonErrorMessage(caught, "Amazon refused the publish."));
     } finally {
       setPushing(false);
     }
   }
 
   const changed = comparison?.changed ?? [];
-  const remoteIssues = comparison?.remote.issues ?? [];
+  const remoteIssues = comparison?.remote?.issues ?? [];
+  // A SKU Amazon does not list yet: publishing creates the offer, so there is no
+  // "before" and the diff table has nothing to say.
+  const creating = comparison?.exists === false;
+  const blockers = comparison?.blockers ?? [];
+  const canSubmit = blockers.length === 0 && (creating || changed.length > 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Push {sku} to Amazon</DialogTitle>
+          <DialogTitle>Publish {sku} to Amazon</DialogTitle>
           <DialogDescription>
-            What Amazon holds now, against this form. Only the differences are submitted.
+            {creating
+              ? "Amazon has no listing for this SKU, so publishing creates the offer."
+              : "What Amazon holds now, against this form. Only the differences are submitted."}
           </DialogDescription>
         </DialogHeader>
 
@@ -134,6 +162,20 @@ export function PushDialog({
             <AlertDescription>
               Amazon rejects any create or update that does not declare one. Sync this SKU from Amazon first — a sync
               refreshes the product type from the listing summary, and never blanks it.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {blockers.length > 0 && (
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertTitle>Not ready to publish</AlertTitle>
+            <AlertDescription>
+              <ul className="list-inside list-disc">
+                {blockers.map((blocker) => (
+                  <li key={blocker}>{blocker}</li>
+                ))}
+              </ul>
             </AlertDescription>
           </Alert>
         )}
@@ -155,7 +197,39 @@ export function PushDialog({
           </Alert>
         )}
 
-        {comparison && !comparing && (
+        {comparison && !comparing && creating && (
+          <div className="space-y-4">
+            <Alert>
+              <CloudUpload />
+              <AlertTitle>This publishes a new offer</AlertTitle>
+              <AlertDescription>
+                The offer carries price, quantity and condition, against ASIN {comparison.asin ?? "—"} as{" "}
+                {comparison.product_type ?? "an undeclared product type"}. Amazon processes it asynchronously, so the
+                row stays pending until a sync confirms it.
+              </AlertDescription>
+            </Alert>
+
+            {comparison.content_pending.length > 0 && (
+              <Alert>
+                <TriangleAlert />
+                <AlertTitle>Content does not go with a new offer</AlertTitle>
+                <AlertDescription>
+                  {comparison.content_pending.map((field) => FIELD_LABELS[field]).join(", ")} stays on this row and
+                  reaches Amazon on the next publish — and only where this seller owns the ASIN's content.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {comparison.warnings.map((warning) => (
+              <Alert key={warning}>
+                <TriangleAlert />
+                <AlertDescription>{warning}</AlertDescription>
+              </Alert>
+            ))}
+          </div>
+        )}
+
+        {comparison && !comparing && !creating && (
           <div className="space-y-4">
             {changed.length === 0 ? (
               <Alert>
@@ -172,9 +246,9 @@ export function PushDialog({
                   <DiffRow
                     key={field}
                     field={field}
-                    from={comparison.remote[field as keyof typeof comparison.remote]}
+                    from={comparison.remote?.[field as keyof AmazonRemoteSnapshot]}
                     to={comparison.changes[field]}
-                    currency={comparison.remote.currency}
+                    currency={comparison.remote?.currency}
                     isContent={comparison.content_changed.includes(field)}
                   />
                 ))}
@@ -219,21 +293,35 @@ export function PushDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pushing}>
             Cancel
           </Button>
-          <Button onClick={() => void push()} disabled={pushing || comparing || changed.length === 0 || !productType}>
-            {pushing ? (
-              <>
-                <Spinner /> Submitting...
-              </>
-            ) : (
-              <>
-                <CloudUpload /> Push{" "}
-                {changed.length > 0 ? `${changed.length} change${changed.length > 1 ? "s" : ""}` : ""}
-              </>
-            )}
+          <Button onClick={() => void push()} disabled={pushing || comparing || !canSubmit || !productType}>
+            <SubmitLabel pushing={pushing} creating={creating} changeCount={changed.length} />
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Three states, three returns — a create, an update, and the submission itself. */
+function SubmitLabel({ pushing, creating, changeCount }: { pushing: boolean; creating: boolean; changeCount: number }) {
+  if (pushing) {
+    return (
+      <>
+        <Spinner /> Submitting...
+      </>
+    );
+  }
+  if (creating) {
+    return (
+      <>
+        <CloudUpload /> Publish offer
+      </>
+    );
+  }
+  return (
+    <>
+      <CloudUpload /> Publish {changeCount > 0 ? `${changeCount} change${changeCount > 1 ? "s" : ""}` : ""}
+    </>
   );
 }
 

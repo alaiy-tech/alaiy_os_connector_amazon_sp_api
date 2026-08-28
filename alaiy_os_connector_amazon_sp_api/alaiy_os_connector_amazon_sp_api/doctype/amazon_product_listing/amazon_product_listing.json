@@ -39,6 +39,8 @@
   "sync_section",
   "last_synced_at",
   "catalog_synced_at",
+  "last_published_at",
+  "last_publish_error",
   "raw_summary"
  ],
  "fields": [
@@ -251,6 +253,20 @@
    "description": "When content and variation parentage were last taken from the Catalog Items API. Empty means this row has never been enriched -- the report-driven reconcile skips rows that already have it, so this is what stops it re-fetching the whole catalog on every run."
   },
   {
+   "fieldname": "last_published_at",
+   "fieldtype": "Datetime",
+   "label": "Last Published At",
+   "read_only": 1,
+   "description": "When a publish last submitted this row to Amazon -- a created offer or an accepted update, not a publish that found nothing to send."
+  },
+  {
+   "fieldname": "last_publish_error",
+   "fieldtype": "Small Text",
+   "label": "Last Publish Error",
+   "read_only": 1,
+   "description": "Why the last publish attempt failed, cleared by the next one that succeeds. A bulk publish leaves no run document, so this is where a failed row says what happened."
+  },
+  {
    "fieldname": "raw_summary",
    "fieldtype": "Code",
    "label": "Raw Summary (JSON)",
@@ -266,7 +282,7 @@
    "link_fieldname": "parent_listing"
   }
  ],
- "modified": "2026-08-25 00:00:00.000000",
+ "modified": "2026-08-28 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Product Listing",

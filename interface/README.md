@@ -10,8 +10,9 @@ and devbench's `UI_COMPOSITION.md` for the mechanism.
 src/
 ├── app/
 │   ├── (main)/os/channels/amazon/
-│   │   ├── listings/            the register: filters, bulk sync, reconcile
-│   │   ├── listings/[...sku]/    one SKU: offer, content, issues, family, push
+│   │   ├── listings/            the register: filters, selection, bulk sync/reconcile/publish
+│   │   ├── listings/new/        draft a listing Amazon does not have yet, and publish it
+│   │   ├── listings/[...sku]/    one SKU: offer, content, issues, family, publish
 │   │   └── health/              account-health metrics + recent seller feedback
 │   ├── (main)/os/settings/connectors/amazon_sp_api/
 │   │                            the seller account, app credentials, order defaults
@@ -59,28 +60,60 @@ listen on, so these screens say the job is running and leave Refresh to the
 operator rather than polling a thousand-row list on a timer. Worth revisiting if
 the base ever proxies realtime.
 
-## Pushing a listing
+## Publishing a listing
 
 The detail screen has no Save button, and its absence is the point.
-`update_listing` writes the values it submitted onto the register row and marks
-it `pending`, so a push *is* the save. A local-only save would invent a third
+`publish_listing` writes the values it submitted onto the register row and marks
+it `pending`, so a publish *is* the save. A local-only save would invent a third
 state — edited here, not on Amazon, and on the row indistinguishable from a
 pushed change Amazon then rejected — which is exactly what `remote_snapshot`
 exists to prevent.
 
-So the flow is compare-then-submit, and the baseline is Amazon rather than the
+So the flow is preview-then-submit, and the baseline is Amazon rather than the
 row:
 
-1. **Compare** (`compare_listing`) — one Listings GET, submits nothing, and
-   answers with Amazon's live state plus the subset of the form that differs.
-2. **Push** (`update_listing`) — submits that subset. Amazon applies it
-   asynchronously, so the row goes `pending` until a sync confirms what actually
-   happened.
+1. **Preview** (`preview_publish`) — one Listings GET, submits nothing, and
+   answers with `exists`, Amazon's live state, and the subset of the form that
+   differs.
+2. **Publish** (`publish_listing`) — creates the offer when `exists` is false,
+   otherwise submits that subset. Amazon applies it asynchronously either way, so
+   the row goes `pending` until a sync confirms what actually happened.
+
+`exists` is the field that earns the second endpoint. `compare_listing` *throws*
+for a SKU Amazon does not list, which is the ordinary state of every row drafted
+here — so the screens could only ever edit listings that already existed. The
+preview answers `exists: false` instead, and the dialog then shows what would be
+created rather than an empty diff.
 
 A blank field means *no opinion*, never "clear this on Amazon" — see
 `diff_from_remote`. Clearing content is not something these screens can express,
 deliberately: an empty image set produces no patch ops at all, and reading a
 blank field as a delete would let a half-rendered form wipe a live listing.
+
+### A new listing, and publishing several at once
+
+`listings/new` is the other half: the register could previously only be *filled*
+by a sync, so the listings you could push were exactly the listings Amazon already
+had. The screen finds the ASIN and product type by catalog search — both are
+opaque identifiers Amazon rejects a typo in, so they are read off a match rather
+than typed — and saves a row with status `incomplete`. Publishing is a separate
+button, because a draft is a real register row: it can be corrected, linked to an
+Item, given content, or left to go out with the next bulk publish.
+
+Selection on the register makes that bulk publish. It selects the page, not the
+result set, because the register pages server-side and the rows not fetched are
+not there to select; it clears whenever the filters or the page move, so a button
+saying "3 selected" never publishes rows the operator can no longer see.
+
+The job is backgrounded like the two bulk reads, and it has the same problem: no
+realtime channel through the proxy to wait on. The answer here is not a toast that
+guesses — the outcome is on the rows. `last_publish_error` is why a row did not
+go, shown on the row itself and cleared by the next publish that succeeds, so
+Refresh is a real report rather than a hope.
+
+A create carries the offer only — price, quantity, condition. Title, description,
+bullets, keywords and images belong to whoever owns the ASIN, so the dialog names
+them as `content_pending` rather than pretending they went.
 
 The one field that saves on its own is the **catalog Item** link, because it
 means nothing to Amazon — it is what stops the next order for that SellerSKU
@@ -121,7 +154,7 @@ visible.
 
 ## What the backend had to grow
 
-Three additions to `api.py`, and one refactor:
+Additions to `api.py`, and one refactor:
 
 | | why |
 |---|---|
@@ -129,6 +162,11 @@ Three additions to `api.py`, and one refactor:
 | `complete_oauth` | the callback above, server-side |
 | `get_config_status` → `redirect_uri` | so a screen can say where consent will land |
 | `oauth.complete_authorization` | extracted from the www callback, now shared by both |
+| `preview_publish` | `compare_listing` throws for a SKU Amazon does not list; a screen has to be able to ask |
+| `publish_listing` | one call for create-or-update, so no screen has to decide which |
+| `publish_listings` | the same decision per row, backgrounded, for a selection |
+| `draft_listing` | the register could only be filled by a sync; this is how a listing starts here |
+| `Amazon Product Listing.last_published_at` / `.last_publish_error` | a bulk publish leaves no run document, so the row is the report |
 
 Everything else these screens do was already whitelisted. The register and the
 marketplace table are read through the platform's `/api/resource` proxy, and the

@@ -1,9 +1,11 @@
 import type {
+  AmazonCatalogMatch,
   AmazonCompareResult,
   AmazonConfigStatus,
   AmazonConnectionStatus,
   AmazonConsentUrl,
   AmazonDesiredListing,
+  AmazonDraftListing,
   AmazonHealthSummary,
   AmazonListingDoc,
   AmazonListingRow,
@@ -11,8 +13,12 @@ import type {
   AmazonMarketplace,
   AmazonOauthResult,
   AmazonOrdersSyncStatus,
+  AmazonProductTypeSuggestion,
+  AmazonPublishPreview,
+  AmazonPublishResult,
   AmazonPushField,
   AmazonQueued,
+  AmazonQueuedCount,
   AmazonTestResult,
   AmazonUpdateResult,
   AmazonVariationFamily,
@@ -219,6 +225,8 @@ const LISTING_ROW_FIELDS = [
   "currency",
   "quantity",
   "last_synced_at",
+  "last_published_at",
+  "last_publish_error",
 ];
 
 export interface ListingQuery {
@@ -393,6 +401,85 @@ export function updateListing(
   marketplace?: string,
 ): Promise<AmazonUpdateResult> {
   return post<AmazonUpdateResult>("update_listing", { sku, changes, marketplace }, "Amazon refused the update.");
+}
+
+// ── publishing ───────────────────────────────────────────────────────────────
+
+/**
+ * What publishing this row would do, without submitting anything.
+ *
+ * `compare_listing` answers the same question for a SKU Amazon already lists and
+ * *throws* for one it does not — which is the ordinary state of a row drafted
+ * here and never published. This one answers `exists: false` instead, and that
+ * is the whole difference: the caller learns whether publishing means creating
+ * the offer or submitting a diff, before it has committed to either.
+ *
+ * `desired` is optional; left out, the register row is the intent. The detail
+ * screen passes its form, the register screen passes nothing.
+ */
+export function previewPublish(
+  sku: string,
+  desired?: AmazonDesiredListing,
+  marketplace?: string,
+): Promise<AmazonPublishPreview> {
+  return post<AmazonPublishPreview>(
+    "preview_publish",
+    { sku, desired, marketplace },
+    "Could not read the live listing from Amazon.",
+  );
+}
+
+/**
+ * Publish one row: create the offer where Amazon has none, else send the diff.
+ *
+ * Blocking, and it re-reads Amazon rather than replaying a preview — the answer
+ * says which of the two happened (`action`), and a create reports the content it
+ * could not carry in `content_pending`.
+ */
+export function publishListing(
+  sku: string,
+  desired?: AmazonDesiredListing,
+  marketplace?: string,
+): Promise<AmazonPublishResult> {
+  return post<AmazonPublishResult>("publish_listing", { sku, desired, marketplace }, "Amazon refused the publish.");
+}
+
+/**
+ * Publish a selection. Backgrounded, because each row is several Amazon calls.
+ *
+ * There is no realtime channel through the proxy to wait on, so the outcome is
+ * read from the rows themselves afterwards: every row carries `last_published_at`
+ * and, when it failed, `last_publish_error`.
+ */
+export function publishListings(skus: string[], marketplace?: string): Promise<AmazonQueuedCount> {
+  return post<AmazonQueuedCount>("publish_listings", { skus, marketplace }, "Could not start the publish.");
+}
+
+// ── catalog search + drafting ────────────────────────────────────────────────
+
+/** Search Amazon's catalog for the ASIN and product type an offer attaches to. */
+export function searchCatalog(query: string, marketplace?: string): Promise<AmazonCatalogMatch[]> {
+  return get<AmazonCatalogMatch[]>("search_catalog", { query, marketplace }, "Could not search the Amazon catalog.");
+}
+
+/**
+ * Amazon's product types for a title, best match first.
+ *
+ * A list rather than an answer, deliberately: a title is genuinely ambiguous and
+ * only the operator can settle it. Useful when catalog search found no ASIN —
+ * every Listings write still has to declare a product type.
+ */
+export function suggestProductType(title: string, marketplace?: string): Promise<AmazonProductTypeSuggestion[]> {
+  return get<AmazonProductTypeSuggestion[]>(
+    "suggest_product_type",
+    { title, marketplace },
+    "Could not look up the product type.",
+  );
+}
+
+/** Register a listing that is not on Amazon yet. Local only — no API call. */
+export function draftListing(draft: AmazonDraftListing): Promise<{ sku: string; listing_status: string }> {
+  return post<{ sku: string; listing_status: string }>("draft_listing", { ...draft }, "Could not create the listing.");
 }
 
 /** Every SKU this seller lists under one parent ASIN. Local read, no API call. */
