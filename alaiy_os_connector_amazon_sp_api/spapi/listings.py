@@ -8,6 +8,12 @@ back to a full PUT when an attribute can't be patched. Delete ends the listing.
 After every write we re-fetch the item and upsert the Amazon Product Listing row
 so the register reflects Amazon's actual state.
 
+`publish_listing` is the one an operator actually asks for, and it is create and
+update behind a single decision: it reads the SKU from Amazon first, creates the
+offer when Amazon has no listing for it, and otherwise submits the difference.
+Nothing else has to know in advance which of the two a row needs — which is what
+makes publishing a *selection* of rows possible at all (`publish_listings`).
+
 What an update *sends* is decided by comparing the operator's values against the
 live listing (compare_listing -> remote_snapshot), never against the register
 row: the row is only as fresh as the last sync, so it cannot say what Amazon is
@@ -23,7 +29,7 @@ from urllib.parse import quote
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, now_datetime
+from frappe.utils import cint, flt, now_datetime, strip_html
 
 from alaiy_os_connector_amazon_sp_api.spapi import catalog
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
@@ -303,13 +309,90 @@ def create_listing(
 	issues = _issues_from(resp)
 	_raise_on_error_issues(issues, _("listing"))
 	# Re-fetch to capture Amazon's derived state, then upsert the register row.
-	return sync_listing(
+	#
+	# Amazon takes a create asynchronously, so the SKU it has just accepted can
+	# still read as not-found for a while. That is not a failed create, and
+	# throwing there would report one — loudly, in the middle of a bulk publish —
+	# so an unreadable listing falls back to recording what was submitted and
+	# marking the row pending. Exactly what an update does, for the same reason.
+	result = sync_listing(
 		sku,
 		marketplace=mp.name,
 		product=product,
 		fulfillment_channel=fulfillment_channel,
 		product_type=product_type,
+		missing_ok=True,
 	)
+	if result is not None:
+		return result
+	return _apply_submitted_offer(
+		sku,
+		mp,
+		asin=asin,
+		product_type=product_type,
+		price=price,
+		quantity=quantity,
+		condition=condition,
+		fulfillment_channel=fulfillment_channel,
+		product=product,
+		issues=issues,
+	)
+
+
+def _apply_submitted_offer(
+	sku,
+	mp,
+	*,
+	asin,
+	product_type,
+	price,
+	quantity,
+	condition,
+	fulfillment_channel,
+	product=None,
+	issues=None,
+):
+	"""Record an accepted-but-not-yet-readable create on the register row.
+
+	The row is created here when it does not exist, because the Desk's new-listing
+	form publishes an offer straight from an unsaved document — the register row
+	for it has never existed, and losing it because Amazon had not finished
+	indexing the SKU would leave an offer live on Amazon that nothing here knows
+	about.
+	"""
+	values = {
+		"doctype": "Amazon Product Listing",
+		"sku": sku,
+		"marketplace": mp.name,
+		"currency": mp.currency,
+		"asin": asin,
+		"product_type": product_type,
+		"condition": condition,
+		"fulfillment_channel": fulfillment_channel or "DEFAULT",
+		"listing_status": "pending",
+		"last_synced_at": now_datetime(),
+	}
+	if price is not None:
+		values["price"] = flt(price)
+	if quantity is not None:
+		values["quantity"] = cint(quantity)
+	if product:
+		values["product"] = product
+
+	if frappe.db.exists("Amazon Product Listing", sku):
+		row = frappe.get_doc("Amazon Product Listing", sku)
+		row.update({k: v for k, v in values.items() if k != "doctype"})
+	else:
+		row = frappe.get_doc(values)
+
+	issues = issues or []
+	row.set("suppression_reasons", [])
+	for issue in issues:
+		row.append("suppression_reasons", issue)
+
+	row.flags.ignore_permissions = True
+	row.save(ignore_permissions=True)
+	return {"sku": sku, "listing_status": row.listing_status, "issues": issues, "read_back": False}
 
 
 # --- update ------------------------------------------------------------------
@@ -536,8 +619,15 @@ def delete_listing(sku, marketplace=None):
 
 
 # --- get + upsert ------------------------------------------------------------
-def get_listing_item(sku, marketplace=None):
-	"""GET the full Listings item with summaries/attributes/issues/offers."""
+def get_listing_item(sku, marketplace=None, missing_ok=False):
+	"""GET the full Listings item with summaries/attributes/issues/offers.
+
+	`missing_ok` answers None for a SKU Amazon has no listing for, rather than
+	throwing. The two callers want opposite things from a 404: for a sync it is
+	the operator's mistake and the message has to say which mistake, while for a
+	publish it is the ordinary case — the listing does not exist yet, which is
+	precisely what the create branch is for.
+	"""
 	conn = _connection()
 	mp = _marketplace(marketplace)
 	params = {
@@ -550,6 +640,8 @@ def get_listing_item(sku, marketplace=None):
 		return client.get(_seller_path(conn.selling_partner_id, sku), params=params, context="listing")
 	except SpApiError as e:
 		if e.status_code == 404:
+			if missing_ok:
+				return None
 			frappe.throw(
 				_(
 					"SKU '{0}' is not a listing on this Amazon account (marketplace {1}). "
@@ -584,10 +676,18 @@ def _item_asin(sku, item):
 	return frappe.db.get_value("Amazon Product Listing", sku, "asin")
 
 
-def sync_listing(sku, marketplace=None, product=None, fulfillment_channel=None, product_type=None):
-	"""Fetch one item from Amazon and upsert the Amazon Product Listing register row."""
+def sync_listing(
+	sku, marketplace=None, product=None, fulfillment_channel=None, product_type=None, missing_ok=False
+):
+	"""Fetch one item from Amazon and upsert the Amazon Product Listing register row.
+
+	Answers None, having written nothing, when `missing_ok` and Amazon has no
+	listing for the SKU.
+	"""
 	mp = _marketplace(marketplace)
-	item = get_listing_item(sku, marketplace=mp.name)
+	item = get_listing_item(sku, marketplace=mp.name, missing_ok=missing_ok)
+	if item is None:
+		return None
 	# Content comes from the ASIN's catalog entry, not from our own listing
 	# attributes — see spapi.catalog for why an offer-only listing has none.
 	asin = _item_asin(sku, item)
@@ -802,7 +902,7 @@ def _apply_content(row, mp, item, summary, catalog_content=None):
 _PRICE_PRECISION = 2
 
 
-def remote_snapshot(sku, marketplace=None):
+def remote_snapshot(sku, marketplace=None, missing_ok=False):
 	"""What Amazon currently holds for a SKU, keyed like an Amazon Product Listing.
 
 	This — not the register row — is the baseline a push must diff against. The
@@ -812,9 +912,14 @@ def remote_snapshot(sku, marketplace=None):
 	edit against the row therefore answers "what did the operator change since
 	the last save?" when the question a push has to answer is "what does Amazon
 	not have yet?".
+
+	`missing_ok` answers None for a SKU Amazon has no listing for — the state a
+	publish reads as "create this", where every other caller reads it as an error.
 	"""
 	mp = _marketplace(marketplace)
-	item = get_listing_item(sku, marketplace=mp.name)
+	item = get_listing_item(sku, marketplace=mp.name, missing_ok=missing_ok)
+	if item is None:
+		return None
 	summaries = item.get("summaries") or []
 	summary = summaries[0] if summaries else {}
 	issues = _issues_from(item)
@@ -1096,3 +1201,367 @@ def sync_all_listings(marketplace=None, notify_user=None):
 	if notify_user:
 		frappe.publish_realtime("amazon_sync_all_complete", summary, user=notify_user)
 	return summary
+
+
+# --- publish (create where Amazon has none, else push the difference) ---------
+# Publishing is the operator's verb; create and update are the two things it can
+# turn out to mean. Which one a row needs is a question only Amazon can answer —
+# the register cannot, because a row is only as fresh as the last sync and a row
+# drafted locally has never been to Amazon at all — so every publish reads the
+# SKU first and branches on the answer. That read is the same one a push preview
+# already costs, so deciding is free.
+#
+# A create carries the offer only (see create_listing: requirements=
+# LISTING_OFFER_ONLY). Product content — title, description, bullets, keywords,
+# images — belongs to whoever owns the ASIN, and a new offer against an existing
+# ASIN is not that. So content the row holds is reported back as `content_pending`
+# rather than smuggled into the create, and reaches Amazon on the next publish,
+# by the update path, where it is diffed and can be rejected visibly.
+
+
+def _register_row(sku):
+	"""The Amazon Product Listing row for a SKU, or a message naming the SKU."""
+	if not sku:
+		frappe.throw(_("A SKU is required."))
+	if not frappe.db.exists("Amazon Product Listing", sku):
+		frappe.throw(
+			_("There is no Amazon Product Listing for SKU '{0}'.").format(sku),
+			title=_("Not in the register"),
+		)
+	return frappe.get_doc("Amazon Product Listing", sku)
+
+
+def desired_from_row(row):
+	"""The state a register row is asking Amazon for, keyed like `desired`.
+
+	This is what makes a bulk publish possible: a push from the detail screen
+	diffs the *form*, unsaved edits included, but a selection of rows has no form
+	behind it. The row is the operator's intent for every SKU they did not open.
+	"""
+	return {
+		"title": row.get("title"),
+		"price": row.get("price"),
+		"quantity": row.get("quantity"),
+		"condition": row.get("condition"),
+		"description": row.get("description"),
+		"bullet_points": _row_bullets(row),
+		"keywords": _row_keywords(row),
+		"images": _row_images(row),
+	}
+
+
+def _create_blockers(row):
+	"""Why this row cannot be created on Amazon yet, in operator terms.
+
+	Both are Amazon's requirements rather than ours — an offer attaches to a
+	catalog ASIN, and every Listings write must declare a product type — and both
+	are reported rather than attempted, so a row that cannot go says why here
+	instead of collecting a rejection from Amazon minutes later.
+	"""
+	blockers = []
+	if not row.get("asin"):
+		blockers.append(
+			_("No ASIN. Use Search Catalog to pick the catalog entry this offer attaches to.")
+		)
+	if not row.get("product_type"):
+		blockers.append(
+			_(
+				"No product type. Every Listings write must declare one — Search Catalog "
+				"supplies it along with the ASIN."
+			)
+		)
+	return blockers
+
+
+def _create_warnings(row):
+	"""Not blockers — an offer Amazon will take, but not one anybody can buy."""
+	warnings = []
+	if not flt(row.get("price")):
+		warnings.append(_("No price. Amazon may accept the offer, but it will not be buyable."))
+	if row.get("quantity") is None or cint(row.get("quantity")) <= 0:
+		warnings.append(_("No quantity. The offer is published out of stock."))
+	return warnings
+
+
+def preview_publish(sku, desired=None, marketplace=None):
+	"""What publishing this row would do, without submitting anything.
+
+	Read-only, and one Listings GET plus a catalog look-up — the same cost as a
+	push preview, because it is the same read. `exists` is the whole answer: with
+	no listing on Amazon the action is a create and `changes` is empty (a create
+	sends the offer wholesale, not a diff); with one, it is `compare_listing`.
+
+	`desired` defaults to the register row, so the register screen can preview a
+	row it has not opened. The detail screen passes the form instead.
+	"""
+	row = _register_row(sku)
+	mp = _marketplace(marketplace or row.get("marketplace"))
+	desired = {k: v for k, v in (desired or desired_from_row(row)).items() if k in _PATCHABLE}
+	remote = remote_snapshot(sku, marketplace=mp.name, missing_ok=True)
+
+	if remote is None:
+		return {
+			"sku": sku,
+			"marketplace": mp.name,
+			"exists": False,
+			"action": "create",
+			"remote": None,
+			"listing_status": row.get("listing_status"),
+			# The two identifiers a create is made of. On this branch there is no
+			# `remote` to read them off, and a screen naming the offer has to say
+			# which ASIN it attaches to.
+			"asin": row.get("asin"),
+			"product_type": row.get("product_type"),
+			"changes": {},
+			"changed": [],
+			"content_changed": [],
+			# Content a create cannot carry, so the screen can say so before it is
+			# asked why the description it typed is not on Amazon.
+			"content_pending": [f for f in _PUSH_FIELDS if f in _CONTENT_FIELDS and desired.get(f)],
+			"blockers": _create_blockers(row),
+			"warnings": _create_warnings(row),
+		}
+
+	changes = diff_from_remote(remote, desired)
+	changed = [f for f in _PUSH_FIELDS if f in changes]
+	return {
+		"sku": sku,
+		"marketplace": mp.name,
+		"exists": True,
+		"action": "update" if changed else "unchanged",
+		"remote": remote,
+		"listing_status": remote.get("listing_status"),
+		"asin": remote.get("asin"),
+		"product_type": remote.get("product_type"),
+		"changes": changes,
+		"changed": changed,
+		"content_changed": [f for f in changed if f in _CONTENT_FIELDS],
+		"content_pending": [],
+		# An update declares the product type too, and _stored_product_type is
+		# where it comes from — a row without one cannot push anything at all.
+		"blockers": (
+			[]
+			if _stored_product_type(sku)
+			else [_("No product type on this row. Sync this SKU from Amazon to fill it in.")]
+		),
+		"warnings": [],
+	}
+
+
+def publish_listing(sku, marketplace=None, desired=None):
+	"""Publish one register row: create the offer, or submit what Amazon lacks.
+
+	Returns {sku, marketplace, action, changed, listing_status, issues, ...} where
+	`action` is one of created / updated / unchanged. Raises whatever the create
+	or update raised — the bulk caller is what turns that into a per-row outcome.
+	"""
+	row = _register_row(sku)
+	mp = _marketplace(marketplace or row.get("marketplace"))
+	desired = {k: v for k, v in (desired or desired_from_row(row)).items() if k in _PATCHABLE}
+	remote = remote_snapshot(sku, marketplace=mp.name, missing_ok=True)
+
+	if remote is None:
+		result = _create_from_row(row, mp, desired)
+	else:
+		changes = diff_from_remote(remote, desired)
+		if changes:
+			result = dict(update_listing(sku, changes, marketplace=mp.name))
+			result["action"] = "updated"
+			result["changed"] = [f for f in _PUSH_FIELDS if f in changes]
+		else:
+			result = {
+				"sku": sku,
+				"action": "unchanged",
+				"changed": [],
+				"listing_status": remote.get("listing_status"),
+				"issues": [],
+			}
+
+	result["marketplace"] = mp.name
+	_record_publish(sku, published=result["action"] in ("created", "updated"))
+	return result
+
+
+def _create_from_row(row, mp, desired):
+	"""Publish the offer a register row describes, for a SKU Amazon does not list."""
+	missing = _create_blockers(row)
+	if missing:
+		frappe.throw(
+			_("Cannot publish {0}: {1}").format(row.name, " ".join(missing)),
+			title=_("Not ready to publish"),
+		)
+
+	result = dict(
+		create_listing(
+			row.name,
+			asin=row.get("asin"),
+			product_type=row.get("product_type"),
+			price=row.get("price"),
+			quantity=row.get("quantity"),
+			condition=row.get("condition") or "new_new",
+			marketplace=mp.name,
+			fulfillment_channel=row.get("fulfillment_channel") or "DEFAULT",
+			product=row.get("product"),
+		)
+	)
+	result["action"] = "created"
+	result["changed"] = ["price", "quantity", "condition"]
+	result["content_pending"] = [f for f in _PUSH_FIELDS if f in _CONTENT_FIELDS and desired.get(f)]
+	return result
+
+
+def _record_publish(sku, published=True, error=None):
+	"""Stamp the row with the outcome of the last publish attempt.
+
+	The register is the report a bulk publish leaves behind — there is no run
+	document, and a worker killed half-way still has to have said what it did — so
+	the outcome lives on the row it happened to. `last_published_at` moves only on
+	an actual submission, and `last_publish_error` holds the last failure until a
+	later attempt clears it.
+
+	Written with `update_modified=False` so a failed publish does not reorder the
+	register, which sorts by `modified`: a row nothing reached should not jump to
+	the top of the list.
+	"""
+	if not frappe.db.exists("Amazon Product Listing", sku):
+		return
+	values = {"last_publish_error": (error or "")[:1000] or None}
+	if published and not error:
+		values["last_published_at"] = now_datetime()
+	frappe.db.set_value("Amazon Product Listing", sku, values, update_modified=False)
+
+
+# A selection has to be bounded somewhere, and this is where: each publish costs
+# a Listings GET, a catalog look-up and a write, so a thousand rows is an hour of
+# Amazon's rate limit. Beyond this, publish in batches.
+PUBLISH_MAX = 500
+
+
+def _publish_error(exc):
+	"""A caught publish failure as one line an operator can act on."""
+	message = strip_html(str(exc) or "").strip()
+	return " ".join(message.split()) or exc.__class__.__name__
+
+
+def publish_listings(skus, marketplace=None, notify_user=None):
+	"""Publish each SKU in turn, creating the ones Amazon does not have.
+
+	Intended to run as a background job: a selection is up to PUBLISH_MAX rows and
+	each costs several Amazon calls. One row's failure is recorded and the run
+	continues — a bulk publish that stopped on the first rejected listing would
+	leave the operator to work out which of the rest went and which did not.
+
+	Publishes an `amazon_publish_complete` realtime event to `notify_user`, and
+	returns the same summary.
+	"""
+	skus = [s for s in (skus or []) if s]
+	counts = {"created": 0, "updated": 0, "unchanged": 0, "failed": 0}
+	results = []
+
+	for sku in skus:
+		try:
+			result = publish_listing(sku, marketplace=marketplace)
+			frappe.db.commit()  # each row stands on its own; keep what got through
+			counts[result["action"]] += 1
+			results.append(
+				{
+					"sku": sku,
+					"action": result["action"],
+					"changed": result.get("changed") or [],
+					"listing_status": result.get("listing_status"),
+					"content_pending": result.get("content_pending") or [],
+				}
+			)
+		except Exception as e:
+			# The row's own partial writes go with the rollback; the stamp that
+			# says why must not, so it is written and committed afterwards.
+			frappe.db.rollback()
+			message = _publish_error(e)
+			_record_publish(sku, published=False, error=message)
+			frappe.db.commit()
+			counts["failed"] += 1
+			results.append({"sku": sku, "action": "failed", "error": message})
+			frappe.log_error(
+				title=f"Amazon publish failed for {sku}"[:140], message=frappe.get_traceback()
+			)
+
+	summary = {
+		"success": True,
+		"marketplace": marketplace,
+		"total": len(skus),
+		**counts,
+		"results": results,
+	}
+	if notify_user:
+		frappe.publish_realtime("amazon_publish_complete", summary, user=notify_user)
+	return summary
+
+
+# --- drafting a listing that is not on Amazon yet ----------------------------
+def draft_listing(
+	sku,
+	*,
+	asin=None,
+	product_type=None,
+	title=None,
+	brand=None,
+	description=None,
+	price=None,
+	quantity=None,
+	condition="new_new",
+	marketplace=None,
+	fulfillment_channel="DEFAULT",
+	product=None,
+	bullet_points=None,
+	keywords=None,
+	images=None,
+):
+	"""Create the register row for a listing that does not exist on Amazon yet.
+
+	Local only — it calls Amazon not at all, and that is the point: it is how a
+	listing comes to exist here before it exists there, which until now nothing
+	outside the Desk form could do. The row lands as `incomplete`, the status the
+	register already had for "not a live listing", and publishing it is a separate
+	decision (`publish_listing`), so a draft can be corrected, or selected into a
+	bulk publish with the rest.
+	"""
+	if not sku:
+		frappe.throw(_("A SKU is required."))
+	sku = str(sku).strip()
+	if frappe.db.exists("Amazon Product Listing", sku):
+		frappe.throw(
+			_("SKU '{0}' is already in the register. Open it and publish it instead.").format(sku),
+			title=_("Already registered"),
+		)
+
+	mp = _marketplace(marketplace)
+	row = frappe.get_doc(
+		{
+			"doctype": "Amazon Product Listing",
+			"sku": sku,
+			"asin": asin,
+			"product_type": product_type,
+			"title": title,
+			"brand": brand,
+			"description": description,
+			"marketplace": mp.name,
+			"currency": mp.currency,
+			"price": flt(price) if price is not None else None,
+			"quantity": cint(quantity) if quantity is not None else None,
+			"condition": condition or "new_new",
+			"fulfillment_channel": fulfillment_channel or "DEFAULT",
+			"product": product,
+			"listing_status": "incomplete",
+		}
+	)
+	for bullet in bullet_points or []:
+		if bullet:
+			row.append("bullet_points", {"bullet": bullet})
+	for keyword in keywords or []:
+		if keyword:
+			row.append("keywords", {"keyword": keyword})
+	for image in _normalize_images(images):
+		row.append("images", {"image_url": image["url"], "is_main": 1 if image["is_main"] else 0})
+
+	row.insert()
+	return {"sku": row.name, "listing_status": row.listing_status, "marketplace": mp.name}

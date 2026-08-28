@@ -34,6 +34,7 @@ operations. No SP-API calls are ever made from the browser.
 - **Login with Amazon OAuth** — sellers authorize via Amazon's consent screen; the app never handles a long-lived seller secret.
 - **Account health monitoring** — syncs health metrics and recent seller feedback per marketplace, with an overall status roll-up.
 - **Listing management** — catalog search (ASIN + product type), create/update/delete offers, and per-SKU or full-catalog sync.
+- **Publishing** — one action per row that creates the offer where Amazon has no listing for the SKU and submits the difference where it has, over one listing or a selection of them.
 - **Order sync** — polls Seller Central and materialises orders directly as **Sales Orders**, idempotent on the Amazon order id, with a manual date-range backfill.
 - **Multi-region support** — `NA` / `EU` / `FE` region groups, with sandbox and custom-endpoint overrides.
 - **Auditable** — every SP-API call is captured in the **SP-API Log** DocType.
@@ -220,12 +221,49 @@ All operations run server-side through whitelisted methods in
 | `search_catalog` | Search the Amazon catalog for an ASIN + product type. |
 | `suggest_product_type` | Resolve a product title to Amazon product types, best match first. |
 | `create_listing` / `update_listing` / `delete_listing` | Manage offers for a SKU. |
+| `draft_listing` | Register a listing that is not on Amazon yet (local only, no API call). |
+| `preview_publish` / `publish_listing` | What publishing a row would do, and doing it — create or update, decided against Amazon. |
+| `publish_listings` | Publish a selection of rows (background job). |
 | `sync_listing` / `sync_all_listings` | Refresh one listing, or the whole catalog (background job). |
 | `sync_orders` / `backfill_orders` | Pull orders into Sales Orders (background job). |
 | `get_orders_sync_status` | Watermark + count of orders synced so far. |
 
 `sync_all_listings` runs in the background (a catalog can be up to 1,000 SKUs)
 and emits the `amazon_sync_all_complete` realtime event to the caller when done.
+
+### Publishing listings
+
+`publish_listing` is one verb over what used to be two decisions. It reads the
+SKU from Amazon first and branches on the answer:
+
+- **Amazon has no listing for it** — the offer is created (`requirements=LISTING_OFFER_ONLY`,
+  against the row's ASIN and product type). This is the state of any row that was
+  drafted here rather than synced from Amazon.
+- **Amazon has one** — only what Amazon does not already have is submitted, diffed
+  against the live listing rather than the register row (see `remote_snapshot`).
+
+Nothing outside this call has to know which of the two a row needs, which is what
+makes a *selection* publishable: `publish_listings` runs the same decision per row
+in a background job, so one selection can freely mix drafts with live listings.
+
+- **A create carries the offer only.** Price, quantity and condition are this
+  seller's; title, description, bullets, keywords and images belong to whoever owns
+  the ASIN. Content on the row is reported back as `content_pending` and goes up on
+  the next publish, through the update path, where it is diffed and can be visibly
+  rejected.
+- **Every row records its own outcome.** A bulk publish leaves no run document, so
+  `last_published_at` and `last_publish_error` on **Amazon Product Listing** are the
+  report: one row's failure is recorded and the run continues, and the next publish
+  that succeeds clears the error. The caller also receives an
+  `amazon_publish_complete` realtime event with the per-SKU summary.
+- **A row that cannot go says why.** `preview_publish` reports `blockers` — no ASIN,
+  no product type — rather than collecting a rejection from Amazon minutes later.
+- **Drafting is separate from publishing.** `draft_listing` creates the register row
+  and calls Amazon not at all; the row lands as `incomplete`, so it can be corrected,
+  linked to an Item, or left to go out with the next bulk publish.
+
+Publishing is bounded at `spapi.listings.PUBLISH_MAX` (500) rows per call: each one
+costs a Listings GET, a catalog look-up and a write.
 
 ### Order sync
 

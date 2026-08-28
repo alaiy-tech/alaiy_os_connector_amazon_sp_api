@@ -3,7 +3,8 @@
 """Whitelisted entry points for Desk/JS. All SP-API access is server-side.
 
 Phase 1: connection status, connect URL, disconnect, ping, health sync/summary.
-Phase 2: catalog search, product-type lookup, listing create/update/delete/sync.
+Phase 2: catalog search, product-type lookup, listing create/update/delete/sync,
+        and publish — one row or a selection, creating what Amazon does not have.
 Phase 4: Seller Central order sync into Sales Orders.
 """
 
@@ -278,6 +279,138 @@ def update_listing(sku, changes, marketplace=None):
 	if isinstance(changes, str):
 		changes = json.loads(changes)
 	return listings.update_listing(sku, changes, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def preview_publish(sku, desired=None, marketplace=None):
+	"""What publishing this row would do — create the offer, or push a diff.
+
+	Read-only, and the one call that answers *which*: `exists` says whether
+	Amazon lists the SKU at all, `changes` is what an update would carry, and
+	`blockers` is why it cannot be published yet. `desired` defaults to the
+	register row, so a screen can preview a row it has not opened.
+	"""
+	_require_manager()
+	if isinstance(desired, str):
+		desired = json.loads(desired)
+	return listings.preview_publish(sku, desired=desired, marketplace=marketplace)
+
+
+@frappe.whitelist(methods=["POST"])
+def publish_listing(sku, desired=None, marketplace=None):
+	"""Publish one register row to Amazon, creating the offer if it has none.
+
+	Blocking — a single SKU is a handful of Amazon calls. Answers
+	{action: created|updated|unchanged, changed, listing_status, issues}.
+	"""
+	_require_manager()
+	if isinstance(desired, str):
+		desired = json.loads(desired)
+	return listings.publish_listing(sku, marketplace=marketplace, desired=desired)
+
+
+@frappe.whitelist(methods=["POST"])
+def publish_listings(skus, marketplace=None):
+	"""Publish a selection of register rows, creating the ones Amazon lacks.
+
+	Runs in the background: each row costs several Amazon calls, so a selection
+	of any size outlives a request. Every row records its own outcome in
+	`last_published_at` / `last_publish_error`, which is what makes the register
+	itself the report — the caller is also sent the `amazon_publish_complete`
+	realtime event with the per-SKU summary.
+	"""
+	_require_manager()
+	if isinstance(skus, str):
+		skus = json.loads(skus)
+	if not isinstance(skus, list | tuple):
+		frappe.throw(_("Select the listings to publish."))
+
+	# Ordered dedupe: a selection can repeat a SKU (two filters, one row), and
+	# publishing it twice would submit the same change twice.
+	seen = {}
+	for sku in skus:
+		if sku:
+			seen[str(sku)] = True
+	skus = list(seen)
+
+	if not skus:
+		frappe.throw(_("Select the listings to publish."))
+	if len(skus) > listings.PUBLISH_MAX:
+		frappe.throw(
+			_("Publishing is limited to {0} listings at a time; {1} were selected.").format(
+				listings.PUBLISH_MAX, len(skus)
+			)
+		)
+
+	conn = frappe.get_cached_doc("Amazon Connection")
+	if not conn.is_connected():
+		frappe.throw(_("Amazon account is not connected."))
+
+	frappe.enqueue(
+		"alaiy_os_connector_amazon_sp_api.spapi.listings.publish_listings",
+		queue="long",
+		# Sized to the selection rather than fixed: the default would kill a
+		# large publish part-way through, and the rows it had already published
+		# would be indistinguishable from the ones it never reached.
+		timeout=min(3600, max(600, 15 * len(skus))),
+		skus=skus,
+		marketplace=marketplace,
+		notify_user=frappe.session.user,
+	)
+	return {"queued": True, "count": len(skus)}
+
+
+@frappe.whitelist(methods=["POST"])
+def draft_listing(
+	sku,
+	asin=None,
+	product_type=None,
+	title=None,
+	brand=None,
+	description=None,
+	price=None,
+	quantity=None,
+	condition="new_new",
+	marketplace=None,
+	fulfillment_channel="DEFAULT",
+	product=None,
+	bullet_points=None,
+	keywords=None,
+	images=None,
+):
+	"""Register a listing that is not on Amazon yet. Calls Amazon not at all.
+
+	The row lands as `incomplete`; publishing it is a separate step, so a draft
+	can be corrected first, or selected into a bulk publish with everything else.
+	"""
+	_require_manager()
+	bullet_points = _as_list(bullet_points)
+	keywords = _as_list(keywords)
+	images = _as_list(images)
+	return listings.draft_listing(
+		sku,
+		asin=asin,
+		product_type=product_type,
+		title=title,
+		brand=brand,
+		description=description,
+		price=price,
+		quantity=quantity,
+		condition=condition,
+		marketplace=marketplace,
+		fulfillment_channel=fulfillment_channel,
+		product=product,
+		bullet_points=bullet_points,
+		keywords=keywords,
+		images=images,
+	)
+
+
+def _as_list(value):
+	"""A repeatable field as a list, whether it arrived as JSON or already parsed."""
+	if isinstance(value, str):
+		value = json.loads(value or "[]")
+	return list(value or [])
 
 
 @frappe.whitelist()

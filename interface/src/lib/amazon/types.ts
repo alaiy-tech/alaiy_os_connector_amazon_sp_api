@@ -100,6 +100,27 @@ export type AmazonListingStatus = "active" | "inactive" | "suppressed" | "incomp
 
 export type AmazonFulfillmentChannel = "DEFAULT" | "AMAZON";
 
+/**
+ * Amazon's condition codes, in the order `Amazon Product Listing.condition`
+ * lists them. Here rather than in a screen because two of them offer the choice
+ * — the detail form and the new-listing form — and a select that disagreed with
+ * the DocType's options would save a value Frappe then refuses.
+ */
+export const LISTING_CONDITIONS = [
+  "new_new",
+  "new_open_box",
+  "new_oem",
+  "used_like_new",
+  "used_very_good",
+  "used_good",
+  "used_acceptable",
+  "collectible_like_new",
+  "collectible_very_good",
+  "collectible_good",
+  "collectible_acceptable",
+  "refurbished_refurbished",
+] as const;
+
 /** The columns the register table reads. `name` is the SKU (autonamed `field:sku`). */
 export interface AmazonListingRow {
   name: string;
@@ -121,6 +142,10 @@ export interface AmazonListingRow {
   currency?: string | null;
   quantity?: number | null;
   last_synced_at?: string | null;
+  /** When a publish last submitted this row. Null on a row never published. */
+  last_published_at?: string | null;
+  /** Why the last publish failed, cleared by the next one that succeeds. */
+  last_publish_error?: string | null;
 }
 
 export interface AmazonListingIssue {
@@ -214,6 +239,104 @@ export interface AmazonUpdateResult {
   issues?: AmazonListingIssue[];
 }
 
+// ── publishing ───────────────────────────────────────────────────────────────
+
+/**
+ * A publish preview, which is `compare_listing` plus the answer to the question
+ * that decides everything else: does Amazon list this SKU at all?
+ *
+ * `exists: false` means publishing *creates* the offer, so `changes` is empty —
+ * a create sends the offer wholesale rather than a diff — and the fields worth
+ * reading instead are `blockers` (why it cannot be created yet) and
+ * `content_pending` (content a create cannot carry; see `AmazonPublishResult`).
+ */
+export interface AmazonPublishPreview {
+  sku: string;
+  marketplace: string;
+  /** Amazon has a listing for this SKU. False means a create. */
+  exists: boolean;
+  action: "create" | "update" | "unchanged";
+  /** Null when Amazon has no listing to compare against. */
+  remote: AmazonRemoteSnapshot | null;
+  listing_status?: string | null;
+  /** The identifiers the write declares — off the row on a create, off Amazon otherwise. */
+  asin?: string | null;
+  product_type?: string | null;
+  changes: Partial<Record<AmazonPushField, unknown>>;
+  changed: AmazonPushField[];
+  content_changed: AmazonPushField[];
+  /** Content this row holds that a newly created offer cannot carry. */
+  content_pending: AmazonPushField[];
+  /** Amazon requirements the row does not meet. Non-empty means it cannot go. */
+  blockers: string[];
+  /** Not blockers — an offer Amazon takes, but that nobody can buy. */
+  warnings: string[];
+}
+
+export type AmazonPublishAction = "created" | "updated" | "unchanged" | "failed";
+
+export interface AmazonPublishResult {
+  sku: string;
+  action: AmazonPublishAction;
+  marketplace?: string;
+  listing_status?: string | null;
+  changed?: AmazonPushField[];
+  /** Present on a create: content that reaches Amazon on the next publish. */
+  content_pending?: AmazonPushField[];
+  issues?: AmazonListingIssue[];
+  /** Present only on `failed`. */
+  error?: string;
+}
+
+/** What the background bulk publish reports, per run and per SKU. */
+export interface AmazonPublishSummary {
+  success: boolean;
+  marketplace?: string | null;
+  total: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  results: AmazonPublishResult[];
+}
+
+// ── catalog search + drafting ────────────────────────────────────────────────
+
+/** One `search_catalog` hit: the ASIN an offer would attach to, and its type. */
+export interface AmazonCatalogMatch {
+  asin: string;
+  title?: string | null;
+  brand?: string | null;
+  image_url?: string | null;
+  /** Every Listings write must declare one, so a match without it is unusable. */
+  product_type?: string | null;
+}
+
+/** `suggest_product_type` answers a list because a title is genuinely ambiguous. */
+export interface AmazonProductTypeSuggestion {
+  product_type: string;
+  display_name: string;
+}
+
+/** What `draft_listing` takes: a register row for a listing not yet on Amazon. */
+export interface AmazonDraftListing {
+  sku: string;
+  asin?: string;
+  product_type?: string;
+  title?: string;
+  brand?: string;
+  description?: string;
+  price?: number;
+  quantity?: number;
+  condition?: string;
+  marketplace?: string;
+  fulfillment_channel?: string;
+  product?: string;
+  bullet_points?: string[];
+  keywords?: string[];
+  images?: AmazonPushImage[];
+}
+
 export interface AmazonVariationChild {
   sku: string;
   title?: string | null;
@@ -237,6 +360,11 @@ export interface AmazonVariationFamily {
 /** What a background job answers: it was queued, not that it finished. */
 export interface AmazonQueued {
   queued: boolean;
+}
+
+/** A queued job over a known set of rows — the count is what the toast says. */
+export interface AmazonQueuedCount extends AmazonQueued {
+  count: number;
 }
 
 // ── account health ───────────────────────────────────────────────────────────

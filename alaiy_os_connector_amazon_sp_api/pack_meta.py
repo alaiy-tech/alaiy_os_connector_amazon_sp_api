@@ -20,8 +20,9 @@ with the gate removed, which is not a shortcut, it is a hole.
 
 ## Reads only
 
-None of the three Listings writes — create_listing, update_listing,
-delete_listing — is registered, and the reason is sequencing rather than taste.
+None of the Listings writes — create_listing, update_listing, delete_listing, and
+the publish_listing / publish_listings pair over them — is registered, and the
+reason is sequencing rather than taste.
 `OS Agent Tool` has no `effect` field yet, so nothing in the row can tell an
 orchestrator that a tool publishes; there is no per-tool toggle layer, so a site
 cannot switch one off; and the Listings write path carries no idempotency key, so
@@ -30,7 +31,15 @@ agent a publish button that no one chose to grant and nothing can take away.
 
 What that costs is small, because `compare_listing` is the whole of the useful
 half: it reports exactly what a push would change, and submits nothing. The pack
-can tell you what to publish without being able to publish it.
+can tell you what to publish without being able to publish it. `preview_publish`
+is the same read one step further — it also answers whether Amazon lists the SKU
+at all — and it is left out for consistency: a preview whose only next step is a
+tool the pack does not have would just be `compare_listing` with a longer name.
+
+`draft_listing` is a write that reaches no API at all, and it is still not here.
+A row it created is a row an agent decided this bench should sell, sitting in the
+register looking exactly like one an operator drafted. The register is where a
+human decides what to publish; it is not somewhere to leave suggestions.
 
 The sync entry points are left out for a different reason: sync_all_listings,
 reconcile_listings and sync_orders page through an entire catalogue or order

@@ -48,6 +48,7 @@ import {
   type AmazonDesiredListing,
   type AmazonListingDoc,
   type AmazonPushImage,
+  LISTING_CONDITIONS,
   bulletTexts,
   keywordTexts,
   pushImages,
@@ -61,22 +62,6 @@ import { ImageListEditor } from "./image-list-editor";
 import { PushDialog } from "./push-dialog";
 import { StringListEditor } from "./string-list-editor";
 import { VariationFamilyCard } from "./variation-family";
-
-/** Amazon's condition codes, as `Amazon Product Listing.condition` lists them. */
-const CONDITIONS = [
-  "new_new",
-  "new_open_box",
-  "new_oem",
-  "used_like_new",
-  "used_very_good",
-  "used_good",
-  "used_acceptable",
-  "collectible_like_new",
-  "collectible_very_good",
-  "collectible_good",
-  "collectible_acceptable",
-  "refurbished_refurbished",
-];
 
 /** Amazon's own caps, so the editors show the limit before a rejection does. */
 const MAX_BULLETS = 5;
@@ -97,11 +82,13 @@ interface Form {
  * One listing: what the register holds, and the two directions it can move.
  *
  * **Down** is *Sync from Amazon* — one Listings GET that overwrites this row with
- * Amazon's answer. **Up** is *Push*, which compares first and submits only the
- * difference.
+ * Amazon's answer. **Up** is *Publish*, which previews first and then either
+ * creates the offer, if Amazon has no listing for this SKU, or submits only the
+ * difference, if it has. A row drafted here has never been to Amazon, so the
+ * create branch is not an edge case — it is how a new listing goes live.
  *
- * There is no Save button, and its absence is the design: `update_listing` writes
- * the values it submitted onto the row itself, so a push *is* the save. A local-only
+ * There is no Save button, and its absence is the design: `publish_listing` writes
+ * the values it submitted onto the row itself, so a publish *is* the save. A local-only
  * save would create a third state — edited here, not on Amazon, indistinguishable
  * on the row from a pushed change Amazon then rejected — which is precisely the
  * confusion `remote_snapshot` exists to avoid. The one exception is the Item link,
@@ -264,7 +251,7 @@ export function ListingDetail({ sku }: { sku: string }) {
               {doc.product_type ? (
                 <code className="text-xs">{doc.product_type}</code>
               ) : (
-                <span className="text-destructive text-xs">Missing — a push will be rejected</span>
+                <span className="text-destructive text-xs">Missing — a publish will be rejected</span>
               )}
             </Field>
             <Field label="Brand">{textOr(doc.brand)}</Field>
@@ -274,7 +261,7 @@ export function ListingDetail({ sku }: { sku: string }) {
 
           <div className="flex flex-wrap items-center gap-2 border-t pt-4">
             <Button onClick={() => setPushOpen(true)} disabled={busy || !connected}>
-              <CloudUpload /> Compare and push
+              <CloudUpload /> Publish to Amazon
             </Button>
             <Button variant="outline" onClick={() => void syncFromAmazon()} disabled={busy || !connected}>
               <CloudDownload /> Sync from Amazon
@@ -396,7 +383,7 @@ export function ListingDetail({ sku }: { sku: string }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CONDITIONS.map((condition) => (
+                {LISTING_CONDITIONS.map((condition) => (
                   <SelectItem key={condition} value={condition}>
                     {conditionLabel(condition)}
                   </SelectItem>

@@ -4,9 +4,20 @@ import { useCallback, useEffect, useState } from "react";
 
 import Link from "next/link";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@alaiy-os/ui/alert-dialog";
 import { Badge } from "@alaiy-os/ui/badge";
 import { Button } from "@alaiy-os/ui/button";
 import { Card, CardContent, CardHeader } from "@alaiy-os/ui/card";
+import { Checkbox } from "@alaiy-os/ui/checkbox";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@alaiy-os/ui/input-group";
 import {
   Pagination,
@@ -19,13 +30,25 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@alaiy-os/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@alaiy-os/ui/table";
 import { cn } from "@alaiy-os/utils";
-import { Boxes, CloudDownload, Link2Off, PackageSearch, RefreshCw, Search, TriangleAlert } from "lucide-react";
+import {
+  Boxes,
+  CircleAlert,
+  CloudDownload,
+  CloudUpload,
+  Link2Off,
+  PackageSearch,
+  Plus,
+  RefreshCw,
+  Search,
+  TriangleAlert,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import {
   amazonErrorMessage,
   fetchConnectionStatus,
   fetchListings,
+  publishListings,
   reconcileListings,
   syncAllListings,
 } from "@/lib/amazon/api";
@@ -72,6 +95,14 @@ const STATUSES: Array<{ value: AmazonListingStatus; label: string }> = [
  * Amazon** reads rich per-listing detail but stops at Amazon's 1,000-SKU cap;
  * **Reconcile** drives the Merchant Listings report, which has no cap but carries
  * only offer and status columns. Both run in the background.
+ *
+ * The one thing here that goes the *other* way is **Publish**, over the checked
+ * rows. What it does per row is decided against Amazon rather than here — a SKU
+ * Amazon does not list gets its offer created, one it does gets whatever the row
+ * has that Amazon does not — so a selection can freely mix drafts with live
+ * listings. It is backgrounded like the two reads, and since there is no realtime
+ * channel through the proxy to wait on, each row records its own outcome:
+ * `last_publish_error` is why a row did not go, shown on the row itself.
  */
 export function Listings() {
   const { marketplaces } = useMarketplaces();
@@ -84,6 +115,13 @@ export function Listings() {
   const [status, setStatus] = useState<AmazonListingStatus | "">("");
   const [marketplace, setMarketplace] = useState("");
   const [unmappedOnly, setUnmappedOnly] = useState(false);
+
+  // Selected SKUs, by row name. Held across a re-read of the same page (a
+  // publish leaves the selection alone so a failed row can be retried) but
+  // dropped whenever the filters or the page move, because rows the operator can
+  // no longer see must not be published by a button that says "3 selected".
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmingPublish, setConfirmingPublish] = useState(false);
 
   const [connection, setConnection] = useState<AmazonConnectionStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,6 +138,11 @@ export function Listings() {
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timeout);
   }, [searchInput]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the point is the change of view, not any value read here
+  useEffect(() => {
+    setSelected(new Set());
+  }, [search, status, marketplace, unmappedOnly, page]);
 
   // The connection is read alongside the rows rather than once on mount: it can be
   // disconnected from another tab or the Desk while this page is open, and every
@@ -162,6 +205,49 @@ export function Listings() {
       }
     } catch (error) {
       toast.error(amazonErrorMessage(error, "Could not start that job."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedSkus = rows.filter((row) => selected.has(row.name)).map((row) => row.name);
+  const allOnPageSelected = rows.length > 0 && selectedSkus.length === rows.length;
+
+  function toggleRow(name: string, checked: boolean) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(name);
+      else next.delete(name);
+      return next;
+    });
+  }
+
+  function togglePage(checked: boolean) {
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const row of rows) {
+        if (checked) next.add(row.name);
+        else next.delete(row.name);
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Queue the publish. The selection is kept rather than cleared: the job writes
+   * its outcome onto the rows, so the same selection plus Refresh is how an
+   * operator sees what happened and retries whatever did not go.
+   */
+  async function runPublish() {
+    setConfirmingPublish(false);
+    setBusy(true);
+    try {
+      const { count } = await publishListings(selectedSkus, marketplace || undefined);
+      toast.success(
+        `Publishing ${count} listing${count === 1 ? "" : "s"}. Refresh in a minute — each row records its own outcome.`,
+      );
+    } catch (error) {
+      toast.error(amazonErrorMessage(error, "Could not start the publish."));
     } finally {
       setBusy(false);
     }
@@ -236,6 +322,24 @@ export function Listings() {
           </Button>
 
           <div className="ms-auto flex flex-wrap items-center gap-2">
+            {selectedSkus.length > 0 && (
+              <>
+                <span className="text-muted-foreground text-sm">{selectedSkus.length} selected</span>
+                <Button
+                  size="sm"
+                  onClick={() => setConfirmingPublish(true)}
+                  disabled={busy || !connected}
+                  title="Creates the offer for SKUs Amazon does not list, and sends the difference for the ones it does"
+                >
+                  <CloudUpload /> Publish
+                </Button>
+              </>
+            )}
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/os/channels/amazon/listings/new">
+                <Plus /> New listing
+              </Link>
+            </Button>
             <Button variant="outline" size="sm" onClick={reload} disabled={loading} aria-label="Refresh">
               <RefreshCw className={loading ? "animate-spin" : undefined} />
             </Button>
@@ -268,6 +372,10 @@ export function Listings() {
             filtered={filtered}
             connected={connected}
             marketplaces={marketplaces}
+            selected={selected}
+            allOnPageSelected={allOnPageSelected}
+            onToggleRow={toggleRow}
+            onTogglePage={togglePage}
           />
         </CardContent>
 
@@ -305,6 +413,25 @@ export function Listings() {
           </Pagination>
         </div>
       </Card>
+
+      <AlertDialog open={confirmingPublish} onOpenChange={setConfirmingPublish}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Publish {selectedSkus.length} listing{selectedSkus.length === 1 ? "" : "s"} to Amazon?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Each row is checked against Amazon first. A SKU Amazon does not list has its offer created; one it already
+              lists receives only what the row has that Amazon does not. Nothing is ever deleted, and a blank field is
+              never read as a deletion. Rows that cannot go — no ASIN, no product type — say so on the row.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void runPublish()}>Publish</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -323,6 +450,10 @@ function RegisterBody({
   filtered,
   connected,
   marketplaces,
+  selected,
+  allOnPageSelected,
+  onToggleRow,
+  onTogglePage,
 }: {
   loading: boolean;
   rows: AmazonListingRow[];
@@ -330,6 +461,10 @@ function RegisterBody({
   filtered: boolean;
   connected: boolean;
   marketplaces: AmazonMarketplace[];
+  selected: Set<string>;
+  allOnPageSelected: boolean;
+  onToggleRow: (name: string, checked: boolean) => void;
+  onTogglePage: (checked: boolean) => void;
 }) {
   if (loading) return <TableSkeleton />;
   if (rows.length === 0) return <EmptyRegister failed={failed} filtered={filtered} connected={connected} />;
@@ -339,6 +474,16 @@ function RegisterBody({
       <Table>
         <TableHeader>
           <TableRow>
+            {/* Selects this page only, which is what it can honestly offer: the
+                register pages server-side, so the rows not fetched are not here
+                to select. */}
+            <TableHead className="w-10">
+              <Checkbox
+                aria-label="Select every listing on this page"
+                checked={pageCheckState(allOnPageSelected, selected.size > 0)}
+                onCheckedChange={(checked) => onTogglePage(checked === true)}
+              />
+            </TableHead>
             <TableHead>SKU / title</TableHead>
             <TableHead>ASIN</TableHead>
             <TableHead>Status</TableHead>
@@ -356,6 +501,8 @@ function RegisterBody({
               key={row.name}
               row={row}
               marketplaceLabel={marketplaceName(marketplaces, row.marketplace)}
+              selected={selected.has(row.name)}
+              onToggle={onToggleRow}
             />
           ))}
         </TableBody>
@@ -364,11 +511,34 @@ function RegisterBody({
   );
 }
 
-function ListingTableRow({ row, marketplaceLabel }: { row: AmazonListingRow; marketplaceLabel: string }) {
+/** Checked when the whole page is, half-checked when only some of it is. */
+function pageCheckState(allSelected: boolean, anySelected: boolean): boolean | "indeterminate" {
+  if (allSelected) return true;
+  return anySelected ? "indeterminate" : false;
+}
+
+function ListingTableRow({
+  row,
+  marketplaceLabel,
+  selected,
+  onToggle,
+}: {
+  row: AmazonListingRow;
+  marketplaceLabel: string;
+  selected: boolean;
+  onToggle: (name: string, checked: boolean) => void;
+}) {
   const isParent = row.is_variation_parent === 1;
 
   return (
-    <TableRow>
+    <TableRow data-state={selected ? "selected" : undefined}>
+      <TableCell>
+        <Checkbox
+          aria-label={`Select ${row.sku || row.name}`}
+          checked={selected}
+          onCheckedChange={(checked) => onToggle(row.name, checked === true)}
+        />
+      </TableCell>
       <TableCell className="max-w-xs">
         <Link
           href={`/os/channels/amazon/listings/${encodeURIComponent(row.name)}`}
@@ -400,6 +570,13 @@ function ListingTableRow({ row, marketplaceLabel }: { row: AmazonListingRow; mar
               <TriangleAlert /> no product type
             </Badge>
           )}
+          {/* A bulk publish leaves no run document, so a row that did not go says
+              so itself. Cleared by the next publish that succeeds. */}
+          {row.last_publish_error ? (
+            <Badge variant="destructive" title={row.last_publish_error}>
+              <CircleAlert /> publish failed
+            </Badge>
+          ) : null}
         </div>
       </TableCell>
       <TableCell className="font-mono text-xs">{textOr(row.asin)}</TableCell>
