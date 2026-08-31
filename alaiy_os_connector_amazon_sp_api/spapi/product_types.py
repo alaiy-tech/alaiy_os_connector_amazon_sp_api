@@ -199,3 +199,66 @@ def attribute_title(schema, name):
 	"""
 	prop = ((schema or {}).get("properties") or {}).get(name) or {}
 	return prop.get("title") or name
+
+
+def attribute_options(schema, name, limit=8):
+	"""The values a required attribute accepts, when it is an enumerated one.
+
+	Returns (shown, total). Amazon puts the enum on the `value` property inside
+	the attribute's item shape, and for attributes like country_of_origin it runs
+	to hundreds — hence the cap and the total, so a caller can say "and N more"
+	rather than either truncating silently or pasting a wall of country codes.
+	"""
+	prop = ((schema or {}).get("properties") or {}).get(name) or {}
+	spec = prop.get("items") if prop.get("type") == "array" else prop
+	value = ((spec or {}).get("properties") or {}).get("value") or {}
+	enum = [v for v in (value.get("enum") or []) if isinstance(v, str)]
+	return enum[:limit], len(enum)
+
+
+def attribute_example(schema, name, marketplace_id):
+	"""A paste-ready value for one attribute, shaped the way its schema says.
+
+	The point is to remove a guess that has no business being one. Amazon's
+	attribute values are nested, marketplace-scoped and inconsistent between
+	attributes — `[{"marketplace_id": ..., "value": ...}]` for most, something
+	else for the rest — and an operator told only that an attribute is missing has
+	to go and read a JSON Schema to find out what to type. Generating the shape
+	from that schema is strictly better than describing it in a docstring nobody
+	reads at the moment they need it.
+
+	The values in it are placeholders: the first enum member where there is one, a
+	blank otherwise. It is a form to fill in, not an answer.
+	"""
+	prop = ((schema or {}).get("properties") or {}).get(name) or {}
+	if prop.get("type") == "array":
+		return [_example_object(prop.get("items") or {}, marketplace_id)]
+	return _example_object(prop, marketplace_id)
+
+
+def _example_object(spec, marketplace_id):
+	"""One object in an attribute's value, filled with placeholders."""
+	properties = (spec or {}).get("properties") or {}
+	# Required keys only where the schema says which; otherwise every key, because
+	# an example missing the one key that mattered is worse than a longer one.
+	keys = [k for k in ((spec or {}).get("required") or list(properties)) if k in properties]
+	out = {}
+	for key in keys:
+		sub = properties.get(key) or {}
+		if key == "marketplace_id":
+			out[key] = marketplace_id
+			continue
+		enum = [v for v in (sub.get("enum") or []) if isinstance(v, str)]
+		if enum:
+			out[key] = enum[0]
+		elif sub.get("type") in ("number", "integer"):
+			out[key] = 0
+		elif sub.get("type") == "boolean":
+			out[key] = True
+		elif sub.get("type") == "array":
+			out[key] = [_example_object(sub.get("items") or {}, marketplace_id)]
+		elif sub.get("type") == "object":
+			out[key] = _example_object(sub, marketplace_id)
+		else:
+			out[key] = ""
+	return out

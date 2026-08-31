@@ -94,6 +94,8 @@ export function CreateAsinDialog({
 
   const blockers = preview?.blockers ?? [];
   const attributeNames = Object.keys(preview?.attributes ?? {}).sort();
+  const extras = preview?.suggested_extra_attributes ?? {};
+  const suggested = Object.keys(extras).length > 0 ? JSON.stringify(extras, null, 2) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -135,6 +137,24 @@ export function CreateAsinDialog({
               </ul>
             </AlertDescription>
           </Alert>
+        )}
+
+        {/*
+          The blockers say what is missing; this says what to paste. Amazon's
+          attribute values are nested and marketplace-scoped, so an operator told
+          only that country_of_origin is required still has a JSON Schema to read
+          before they can act. Generated from that schema and already merged with
+          whatever Extra Attributes the row holds, so it goes back in whole.
+        */}
+        {suggested && (
+          <div className="space-y-2">
+            <div className="font-medium text-sm">Starting point for Extra Attributes</div>
+            <p className="text-muted-foreground text-xs">
+              Placeholder values — replace them, then paste this into Extra Attributes on this row. It already includes
+              anything that field holds now.
+            </p>
+            <pre className="max-h-64 overflow-auto rounded bg-muted p-3 text-xs">{suggested}</pre>
+          </div>
         )}
 
         {preview && !loading && (

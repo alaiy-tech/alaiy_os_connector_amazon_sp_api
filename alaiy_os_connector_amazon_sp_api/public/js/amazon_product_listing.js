@@ -293,12 +293,28 @@ function amazon_create_asin(frm) {
 function amazon_review_asin_creation(frm, preview) {
 	const blockers = preview.blockers || [];
 	if (blockers.length) {
+		// The blockers say what is missing; this says what to paste. Amazon's
+		// attribute values are nested and marketplace-scoped, so an operator told
+		// only that country_of_origin is required still has a JSON Schema to read
+		// before they can act. The stub is generated from that schema, already
+		// merged with whatever Extra Attributes the row holds, so it can go
+		// straight back into the field.
+		const stub = preview.suggested_extra_attributes || {};
+		const template = Object.keys(stub).length
+			? `<p><b>${__("Starting point for Extra Attributes")}</b></p>
+				<p class="text-muted small">${__(
+					"Placeholder values — replace them, then paste this into Extra Attributes on this row. It already includes anything that field holds now."
+				)}</p>
+				<pre style="max-height:16rem;overflow:auto;">${frappe.utils.escape_html(
+					JSON.stringify(stub, null, 2)
+				)}</pre>`
+			: "";
 		frappe.msgprint({
 			title: __("Not ready to create"),
 			indicator: "red",
 			message: `<ul>${blockers
 				.map((b) => `<li>${frappe.utils.escape_html(b)}</li>`)
-				.join("")}</ul>`,
+				.join("")}</ul>${template}`,
 		});
 		return;
 	}

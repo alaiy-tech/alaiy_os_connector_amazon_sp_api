@@ -206,3 +206,129 @@ class TestRequiredAttributes(UnitTestCase):
 		# than one that says an attribute is missing without saying which.
 		self.assertEqual(product_types.attribute_title(SCHEMA, "item_name"), "item_name")
 		self.assertEqual(product_types.attribute_title(SCHEMA, "country_of_origin"), "Country of Origin")
+
+
+# A required attribute of each kind: one a listing field feeds, and two that
+# nothing on the form does — the enum one being where a bare "add it" is least
+# actionable, since the title an operator sees says "country-of-origin" and the
+# value Amazon wants is "IN".
+ADVICE_SCHEMA = {
+	"required": ["brand", "country_of_origin", "supplier_declared_dg_hz_regulation"],
+	"properties": {
+		"brand": {"title": "Brand Name"},
+		"country_of_origin": {
+			"title": "country-of-origin",
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["value", "marketplace_id"],
+				"properties": {
+					"value": {"type": "string", "enum": ["IN", "CN", "US"]},
+					"marketplace_id": {"type": "string"},
+				},
+			},
+		},
+		"supplier_declared_dg_hz_regulation": {
+			"title": "Dangerous Goods Regulations",
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["value"],
+				"properties": {"value": {"type": "string", "enum": ["not_applicable", "ghs"]}},
+			},
+		},
+	},
+}
+
+
+class TestBlockerAdvice(UnitTestCase):
+	"""A blocker is only worth its message if the message names the right place.
+
+	`brand` has a field on the form. Telling an operator to hand-write JSON for it
+	is not merely unhelpful — it is a wrong instruction that *works*, leaving two
+	sources for one value with the form's copy silently losing.
+	"""
+
+	def _blockers(self, row):
+		return listings.asin_create_blockers(row, _attributes(row), ADVICE_SCHEMA)
+
+	def test_a_field_backed_attribute_points_at_the_field(self):
+		row = _row(title="X", product_type="PET_ACTIVITY_STRUCTURE")
+		blocker = next(b for b in self._blockers(row) if "Brand Name" in b)
+		self.assertIn("Fill in Brand on this row", blocker)
+		self.assertNotIn("Extra Attributes", blocker)
+
+	def test_an_attribute_with_no_field_still_points_at_extra_attributes(self):
+		row = _row(title="X", product_type="PET_ACTIVITY_STRUCTURE")
+		blocker = next(b for b in self._blockers(row) if "Dangerous Goods" in b)
+		self.assertIn("Extra Attributes", blocker)
+
+	def test_accepted_values_are_named_for_an_enumerated_attribute(self):
+		# "country-of-origin" as a label tells an operator nothing about what to
+		# type. The enum does.
+		row = _row(title="X", product_type="PET_ACTIVITY_STRUCTURE")
+		blocker = next(b for b in self._blockers(row) if "country_of_origin" in b)
+		self.assertIn("IN", blocker)
+
+	def test_a_long_enum_is_capped_and_says_how_many_more(self):
+		schema = {
+			"required": ["country_of_origin"],
+			"properties": {
+				"country_of_origin": {
+					"title": "country-of-origin",
+					"type": "array",
+					"items": {
+						"type": "object",
+						"required": ["value"],
+						"properties": {"value": {"enum": [f"C{i}" for i in range(50)]}},
+					},
+				}
+			},
+		}
+		row = _row(title="X", brand="Naya", product_type="X")
+		blocker = next(
+			b
+			for b in listings.asin_create_blockers(row, _attributes(row, {"naya"}), schema)
+			if "country_of_origin" in b
+		)
+		self.assertIn("42 more", blocker)
+
+
+class TestSuggestedExtraAttributes(UnitTestCase):
+	def test_the_stub_is_shaped_like_the_schema_and_carries_the_marketplace(self):
+		example = product_types.attribute_example(
+			ADVICE_SCHEMA, "country_of_origin", MARKETPLACE.marketplace_id
+		)
+		self.assertEqual(example, [{"value": "IN", "marketplace_id": MARKETPLACE.marketplace_id}])
+
+	def test_only_required_keys_of_the_item_shape_are_offered(self):
+		# supplier_declared_dg_hz_regulation's item requires `value` alone, so a
+		# marketplace_id in the stub would be noise the operator has to delete.
+		example = product_types.attribute_example(
+			ADVICE_SCHEMA, "supplier_declared_dg_hz_regulation", MARKETPLACE.marketplace_id
+		)
+		self.assertEqual(example, [{"value": "not_applicable"}])
+
+	def test_a_field_backed_attribute_is_never_suggested_as_json(self):
+		# The other half of the same rule: brand is a field, so it must not appear
+		# in a JSON stub that would become a second source for it.
+		row = _row(title="X", product_type="PET_ACTIVITY_STRUCTURE")
+		with patch.object(listings, "_gtin_exempt_brands", return_value=frozenset()):
+			stub = listings._suggested_extra_attributes(
+				MARKETPLACE, row, listings._catalog_attributes(MARKETPLACE, row), ADVICE_SCHEMA
+			)
+		self.assertNotIn("brand", stub)
+		self.assertIn("country_of_origin", stub)
+
+	def test_what_the_row_already_holds_survives_the_merge(self):
+		# Pasting the stub back must not discard an attribute entered earlier.
+		row = _row(
+			title="X",
+			product_type="PET_ACTIVITY_STRUCTURE",
+			extra_attributes='{"item_type_keyword": [{"value": "dog crate"}]}',
+		)
+		with patch.object(listings, "_gtin_exempt_brands", return_value=frozenset()):
+			stub = listings._suggested_extra_attributes(
+				MARKETPLACE, row, listings._catalog_attributes(MARKETPLACE, row), ADVICE_SCHEMA
+			)
+		self.assertEqual(stub["item_type_keyword"], [{"value": "dog crate"}])
