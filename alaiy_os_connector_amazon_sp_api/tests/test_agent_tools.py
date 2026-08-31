@@ -63,6 +63,46 @@ class TestPackManifest(UnitTestCase):
 		ids = [tool["tool_id"] for tool in pack_meta.TOOLS]
 		self.assertEqual(len(ids), len(set(ids)))
 
+	def test_the_two_fulfilment_vocabularies_never_share_a_parameter_name(self):
+		"""A listing's fulfillment_channel is DEFAULT/AMAZON; an order's
+		fulfillment_network is AFN/MFN. One parameter name carrying both enums is
+		how a model that has just read one tool passes a plausible wrong value to
+		the next, so the names are kept apart and this is what holds them there.
+		"""
+		seen = {}
+		for tool in pack_meta.TOOLS:
+			for name, spec in tool["parameters_schema"].get("properties", {}).items():
+				if "fulfillment" not in name or "enum" not in spec:
+					continue
+				values = tuple(spec["enum"])
+				self.assertEqual(seen.setdefault(name, values), values, f"{tool['tool_id']}.{name}")
+		self.assertEqual(seen.get("fulfillment_channel"), ("DEFAULT", "AMAZON"))
+		self.assertEqual(seen.get("fulfillment_network"), ("AFN", "MFN"))
+
+	def test_every_sales_read_declares_the_permission_it_checks(self):
+		"""The local sales reads gate on `Sales Order` read and nothing else, so
+		that is what they must declare — a pack whose declarations drift from its
+		gates makes `api/agent_settings.py`'s satisfied/declared split meaningless.
+		"""
+		local_reads = {
+			"get_sales_summary",
+			"get_top_selling_products",
+			"get_product_sales",
+			"compare_sales_periods",
+			"list_amazon_orders",
+		}
+		by_id = {tool["tool_id"]: tool for tool in pack_meta.TOOLS}
+		self.assertEqual(local_reads - set(by_id), set())
+		for tool_id in local_reads:
+			with self.subTest(tool=tool_id):
+				self.assertEqual(
+					by_id[tool_id]["required_permissions"],
+					[{"doctype": "Sales Order", "ptype": "read"}],
+				)
+		# The live one takes the manager role instead, which this field cannot
+		# express — so it declares nothing rather than a plausible proxy.
+		self.assertEqual(by_id["get_amazon_order_metrics"]["required_permissions"], [])
+
 
 class TestCsvRowShapes(UnitTestCase):
 	def test_list_listings_envelope_gives_up_its_rows(self):
@@ -110,6 +150,56 @@ class TestCsvRowShapes(UnitTestCase):
 			"changes": {"price": 22.5},
 			"changed": True,
 			"content_changed": False,
+		}
+		self.assertEqual(csv_export._rows_from(result), [result])
+
+	def test_the_orders_envelope_gives_up_its_orders(self):
+		"""list_amazon_orders mirrors list_listings: four metadata keys, one list."""
+		result = {
+			"total": 412,
+			"page_no": 1,
+			"page_size": 20,
+			"has_more": True,
+			"orders": [{"amazon_order_id": "111-1", "units": 2}],
+		}
+		self.assertEqual(csv_export._rows_from(result), [{"amazon_order_id": "111-1", "units": 2}])
+
+	def test_the_sales_summary_envelope_gives_up_its_buckets(self):
+		"""Its scalars are nested — period, totals, coverage — so the envelope
+		stays inside the threshold and the CSV holds the series rather than the
+		single line that summarises it."""
+		result = {
+			"period": {"date_from": "2026-08-01", "date_to": "2026-08-31", "granularity": "day"},
+			"currency": "INR",
+			"totals": {"product_sales": 400.0, "units": 13},
+			"coverage": {"first_order_date": "2026-03-01", "note": None},
+			"buckets": [{"period_start": "2026-08-01", "product_sales": 100.0}],
+		}
+		self.assertEqual(
+			csv_export._rows_from(result), [{"period_start": "2026-08-01", "product_sales": 100.0}]
+		)
+
+	def test_the_top_products_envelope_gives_up_its_rows(self):
+		result = {
+			"period": {"date_from": "2026-08-01", "date_to": "2026-08-31"},
+			"ranking": {"by": "revenue", "group_by": "sku", "limit": 10},
+			"currency": "INR",
+			"totals": {"product_sales": 400.0, "products": 12},
+			"rows": [{"amazon_seller_sku": "KETTLE-BLUE", "units": 9}],
+		}
+		self.assertEqual(
+			csv_export._rows_from(result), [{"amazon_seller_sku": "KETTLE-BLUE", "units": 9}]
+		)
+
+	def test_a_period_comparison_is_one_row_not_its_nested_periods(self):
+		"""compare_sales_periods carries no list at all, so it is the record it
+		looks like — a two-period comparison is one row of a spreadsheet."""
+		result = {
+			"current": {"date_from": "2026-08-01", "product_sales": 400.0},
+			"baseline": {"date_from": "2026-07-01", "product_sales": 320.0},
+			"currency": "INR",
+			"change": {"product_sales": {"absolute": 80.0, "percent": 25.0}},
+			"coverage": {"first_order_date": "2026-03-01"},
 		}
 		self.assertEqual(csv_export._rows_from(result), [result])
 

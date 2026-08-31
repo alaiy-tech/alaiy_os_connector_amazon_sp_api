@@ -66,6 +66,42 @@ without anyone asking it to. The honest version is to report the row's
 `last_synced_at` and say the answer is as of then, which is what the tool
 descriptions require.
 
+## Two sources for one question
+
+The sales tools answer from two places, and that is the design rather than an
+accident of what was easy. `get_amazon_order_metrics` is one live Sales API call
+and is what Amazon says this account sold; the other six aggregate the Sales
+Orders the order sync wrote. Amazon's figure is authoritative and cannot be
+broken down by SKU. The local ones can be sliced any way and are only as complete
+as the sync.
+
+Registering only one of them would have been the tidier manifest and the worse
+pack. Local alone answers "which SKUs" and quietly under-reports whenever the
+sync is behind, with nothing in the number to say so. Amazon alone answers a
+topline and then cannot say what sold. Together they check each other, which is
+why the tool descriptions tell a model to report the disagreement rather than
+pick a side.
+
+None of them is a payout. Amazon's fees and shipping are not mapped by the order
+sync, and `getOrderMetrics` reports ordered product sales, so *both* sides are
+gross. Every description says so, because "revenue" read as "earnings" is the
+one misreading here that costs someone money. Fees, refunds and settlements are
+a Finances API problem with a backing doctype behind it — a slow report poll is a
+job, not a tool call, which is the same line drawn below for the sync entry
+points.
+
+`get_orders_sync_status` gained the coverage window (`first_order_date`,
+`last_order_date`) rather than a seventh tool being added for it. It is the same
+question as "is order sync working", and without it every local figure lies by
+omission: a bench whose sync reaches back to March answers "sales in January"
+with a confident zero, and nothing in the zero distinguishes "you sold nothing"
+from "we have no data".
+
+`list_amazon_orders` is the one sales read that does not apply the sold filter —
+it takes a `status`, so hiding cancelled orders would make that parameter a lie.
+Each row carries `counts_as_sold` instead, and its description forbids adding the
+page up: the rows and the totals are answering deliberately different questions.
+
 ## Except one, and it writes a file
 
 `export_csv` is a write. What it writes is a private File owned by the run's user,
@@ -102,12 +138,17 @@ PACK_ICON = "shopping-cart"
 CONNECTOR_ID = "amazon_sp_api"
 
 DESCRIPTION = (
-	"Answers questions about this seller's Amazon presence: lists their own "
-	"listings and what Amazon objects to about each, searches Amazon's catalog for "
-	"an ASIN and product type, previews what a listing push would change without "
-	"submitting it, reads a variation family, reports synced account health and "
-	"order-sync state, and links or exports any of it as a CSV. Reads only — it "
-	"cannot publish."
+	"Answers questions about this seller's Amazon presence and their Amazon sales. "
+	"Lists their own listings and what Amazon objects to about each, searches "
+	"Amazon's catalog for an ASIN and product type, previews what a listing push "
+	"would change without submitting it, reads a variation family, and reports "
+	"synced account health and order-sync state. Reports sales over any period — "
+	"revenue, units, orders and average order value, the best-selling SKUs and "
+	"ASINs, how one product sells over time, one period against another, and the "
+	"individual orders behind any of it — from the synced orders, alongside "
+	"Amazon's own live figures for the same period. Links or exports any of it as "
+	"a CSV. Reads only — it cannot publish, and its sales figures are gross "
+	"merchandise value rather than a payout, because Amazon's fees are not mapped."
 )
 
 # Left at the registry's own default. A cheaper model would do for the two
@@ -116,12 +157,15 @@ DESCRIPTION = (
 # Amazon rejects the submission.
 MODEL = "claude-sonnet-5"
 
-# The longest real chain is now the register one: list_listings ->
-# get_listing_issues -> compare_listing -> get_listing_link -> export_csv, plus
-# the reply, is six. Fourteen leaves room for a second page of listings and one
-# wrong turn without allowing a long chain of speculative catalog queries, or a
-# walk through the whole register one page at a time.
-MAX_TURNS = 14
+# The longest real chain is now a sales one, and it is longer than the register
+# one it replaces. "How did the blue kettle do last month, and is that better
+# than the month before" is list_listings -> get_product_sales ->
+# compare_sales_periods -> get_listing_link, and a two-source answer costs a
+# further get_orders_sync_status and get_amazon_order_metrics before the reply:
+# seven. Sixteen leaves that room plus a second page and one wrong turn, without
+# allowing a walk through the whole register or a year of daily buckets one call
+# at a time.
+MAX_TURNS = 16
 
 _API = f"{_APP}.api"
 
@@ -147,6 +191,33 @@ _API = f"{_APP}.api"
 # drifts out of this enum comes back as an error naming the real ones rather than
 # as a silently empty page.
 _LISTING_STATUSES = ["active", "inactive", "suppressed", "incomplete", "pending"]
+
+# Amazon's own fulfilment vocabulary, from Sales Order.amazon_fulfillment_channel
+# and from the Sales API's `fulfillmentNetwork`. Deliberately NOT the DEFAULT /
+# AMAZON of `list_listings.fulfillment_channel`: the same idea, two enums, and a
+# model that has just read one tool would carry its values into the other. The
+# sales tools therefore call the parameter `fulfillment_network`, so a wrong value
+# is a wrong name rather than a plausible one.
+_FULFILLMENT_NETWORKS = ["AFN", "MFN"]
+
+# How the local sales reads bucket a period. `total` is one bucket for the whole
+# of it, which is what makes it the right granularity for a headline figure.
+_SALES_GRANULARITIES = ["day", "week", "month", "total"]
+
+# The date pair every sales read takes. Repeated rather than shared by reference
+# because each tool's `date_to` sentence differs in what it defaults to.
+def _period_schema(default_note):
+	return {
+		"date_from": {
+			"type": "string",
+			"description": "First day of the period, inclusive, as YYYY-MM-DD.",
+		},
+		"date_to": {
+			"type": "string",
+			"description": f"Last day of the period, inclusive, as YYYY-MM-DD. {default_note}",
+		},
+	}
+
 
 # What a push may carry, from spapi.listings._PUSH_FIELDS. Named here rather than
 # imported because importing it would pull the SP-API client into the migrate that
@@ -205,12 +276,21 @@ _DESIRED_SCHEMA = {
 # get_orders_sync_status read through `frappe.get_all` / `db.count`, which ignore
 # permissions, so there is no quiet under-permissioning for them.
 #
-# The four new rows are the exception that proves the rule: list_listings,
+# The register reads are the exception that proves the rule: list_listings,
 # get_listing_issues and get_listing_link all gate on
 # `has_permission("Amazon Product Listing", "read")` and export_csv on
 # `has_permission("File", "create")`, so declaring those says exactly what the code
 # does — and export_csv's is the one permission a site can revoke to take a tool
 # away from this pack.
+#
+# The five local sales reads follow the register reads, not the live ones: they
+# read Sales Orders and call no Amazon API, so `{Sales Order, read}` is what the
+# endpoint actually checks and what it declares. That makes it a second revocable
+# switch — a site that withholds Sales Order read from the pack's Run As User
+# loses the sales half and keeps the listings half, and factory.py refuses the
+# whole pack loudly rather than returning zeros. `get_amazon_order_metrics` is
+# live, so it takes `_require_manager()` like every other live call and declares
+# nothing, for the same reason search_catalog does not.
 TOOLS = [
 	{
 		"tool_id": "list_listings",
@@ -498,18 +578,364 @@ TOOLS = [
 	{
 		"tool_id": "get_orders_sync_status",
 		"description": (
-			"Whether Amazon order sync is configured and how far it has got. "
-			"Takes no arguments. Returns {configured, last_sync_at, "
-			"synced_orders}: whether a customer is set for Amazon orders, the "
-			"watermark the scheduled sync has reached, and how many Sales Orders "
-			"carry an Amazon order id.\n\n"
+			"Whether Amazon order sync is configured, how far it has got, and which "
+			"dates it covers. Takes no arguments. Returns {configured, last_sync_at, "
+			"synced_orders, first_order_date, last_order_date}.\n\n"
 			"Use it to answer \"are my Amazon orders coming in\" and to explain a "
 			"gap: `configured` false means nothing has ever synced and no amount "
 			"of waiting will change that. `synced_orders` counts orders ever "
-			"synced, not orders in any period."
+			"synced, not orders in any period.\n\n"
+			"`first_order_date` and `last_order_date` are the coverage window, and "
+			"they are what every sales figure depends on. Check them before "
+			"answering about any period that might start before the sync did: a zero "
+			"for a month the sync never reached means there is no data, not that "
+			"nothing sold, and those are opposite answers. The sales tools each "
+			"carry the same window and a `coverage.note` when the period runs past "
+			"it — pass that note on rather than reporting the zero alone."
 		),
 		"handler": f"{_API}.get_orders_sync_status",
 		"parameters_schema": {"type": "object", "properties": {}},
+		"required_permissions": [],
+	},
+	{
+		"tool_id": "get_sales_summary",
+		"description": (
+			"What this seller sold on Amazon over a period: revenue, units, orders "
+			"and average order value, bucketed by day, week, month, or as one total. "
+			"Returns {period, currency, totals, coverage, buckets}.\n\n"
+			"This is where a sales question starts when it names a period rather than "
+			"a product — \"how did we do last month\", \"sales this quarter\", "
+			"\"are we growing\". Use `granularity: total` for a single headline "
+			"figure and a dated granularity only when the shape over time is the "
+			"question; a bucket with no orders is absent rather than zero.\n\n"
+			"Two revenue figures, and they are not interchangeable. `product_sales` "
+			"is items only and is the one to quote. `order_total` adds the tax "
+			"Amazon reported. NEITHER is a payout: Amazon's fees and shipping are "
+			"not mapped by the sync at all, so both are gross merchandise value and "
+			"an answer must not call either one profit, earnings or takings. "
+			"`get_amazon_order_metrics` is Amazon's own figure for the same period "
+			"and is what to check this against.\n\n"
+			"Local data, computed from the Sales Orders the order sync wrote, so it "
+			"is only as complete as that sync. Read `coverage` before trusting a "
+			"small number: `coverage.note` is set whenever the period reaches past "
+			"what has synced, and it says so in words to pass on. "
+			"`totals.orders_at_fallback_rate` counts orders whose currency "
+			"conversion could not be resolved and was left at 1.0 — if it is above "
+			"zero, say the total is approximate."
+		),
+		"handler": f"{_API}.get_sales_summary",
+		"parameters_schema": {
+			"type": "object",
+			"properties": {
+				**_period_schema("Defaults to today."),
+				"granularity": {
+					"type": "string",
+					"enum": _SALES_GRANULARITIES,
+					"description": (
+						"How to bucket the period. Defaults to day. Use `total` for "
+						"one figure covering the whole period."
+					),
+				},
+				"fulfillment_network": {
+					"type": "string",
+					"enum": _FULFILLMENT_NETWORKS,
+					"description": (
+						"Optional. AFN is fulfilled by Amazon (FBA), MFN by the "
+						"seller. Not the same values as list_listings' "
+						"`fulfillment_channel`."
+					),
+				},
+			},
+			"required": ["date_from"],
+		},
+		"required_permissions": [
+			{"doctype": "Sales Order", "ptype": "read"},
+		],
+	},
+	{
+		"tool_id": "get_top_selling_products",
+		"description": (
+			"Rank this seller's best-selling SKUs or ASINs over a period. Returns "
+			"{period, ranking, currency, totals, rows}, each row carrying "
+			"{amazon_seller_sku or amazon_asin, item_code, item_name, units, "
+			"order_count, product_sales, share_of_product_sales}.\n\n"
+			"The answer to \"what sells best\", \"top ten products\", \"which "
+			"SKUs make the money\". Rank `by` revenue or units — they routinely "
+			"disagree, and if the question does not say which, revenue is the "
+			"default and worth naming in the answer. `group_by` sku is one of this "
+			"seller's offers; asin groups every SKU of the same product together, "
+			"which is what to use when they list a product several times.\n\n"
+			"`share_of_product_sales` is each row against the period's whole "
+			"revenue, not against the ranked rows, so a top ten adding to 0.4 means "
+			"those ten are 40% of everything sold. `totals.products` is how many "
+			"distinct ones sold in the period: say \"top 10 of 340\" rather than "
+			"letting the list imply it is all of them.\n\n"
+			"`product_sales` is gross merchandise value from synced orders — items "
+			"only, no Amazon fees, not a payout. Lines whose SKU or ASIN was never "
+			"recorded cannot be ranked and are reported as "
+			"`totals.unattributed_product_sales`; mention it if it is large."
+		),
+		"handler": f"{_API}.get_top_selling_products",
+		"parameters_schema": {
+			"type": "object",
+			"properties": {
+				**_period_schema("Defaults to today."),
+				"by": {
+					"type": "string",
+					"enum": ["revenue", "units"],
+					"description": "What to rank on. Defaults to revenue.",
+				},
+				"group_by": {
+					"type": "string",
+					"enum": ["sku", "asin"],
+					"description": (
+						"Rank this seller's own SKUs, or group every SKU of one "
+						"product under its ASIN. Defaults to sku."
+					),
+				},
+				"limit": {
+					"type": "integer",
+					"description": "How many rows. Defaults to 10, capped at 50.",
+					"minimum": 1,
+				},
+				"fulfillment_network": {
+					"type": "string",
+					"enum": _FULFILLMENT_NETWORKS,
+					"description": "Optional. AFN is FBA, MFN is merchant-fulfilled.",
+				},
+			},
+			"required": ["date_from"],
+		},
+		"required_permissions": [
+			{"doctype": "Sales Order", "ptype": "read"},
+		],
+	},
+	{
+		"tool_id": "get_product_sales",
+		"description": (
+			"How ONE product sold over a period, bucketed. Pass exactly one of `sku` "
+			"or `asin`. Returns {product, period, currency, totals, buckets} with "
+			"units, orders and revenue per bucket.\n\n"
+			"This is what connects a listing to its sales: `list_listings` finds the "
+			"SKU, this says whether it sells. Use it for \"how is this SKU doing\", "
+			"\"is this product growing\", \"did the price change help\". Pass "
+			"`asin` to cover every SKU of the same product at once, `sku` for one "
+			"specific offer.\n\n"
+			"Defaults to month buckets, which is usually the right shape for a trend; "
+			"a bucket with no sales is absent, so gaps in the series are real. An "
+			"empty `buckets` with no `coverage_note` means this product genuinely "
+			"sold nothing in the period — a real answer, and worth pairing with the "
+			"listing's status from `list_listings`, because a suppressed listing "
+			"selling nothing is a different finding from a live one selling nothing."
+		),
+		"handler": f"{_API}.get_product_sales",
+		"parameters_schema": {
+			"type": "object",
+			"properties": {
+				"sku": {
+					"type": "string",
+					"description": (
+						"This seller's own SKU — the name of the "
+						"`Amazon Product Listing` record. Pass this OR `asin`."
+					),
+				},
+				"asin": {
+					"type": "string",
+					"description": (
+						"Amazon's product id. Covers every SKU of that product. "
+						"Pass this OR `sku`."
+					),
+				},
+				**_period_schema("Defaults to today."),
+				"granularity": {
+					"type": "string",
+					"enum": _SALES_GRANULARITIES,
+					"description": "How to bucket the period. Defaults to month.",
+				},
+			},
+			"required": ["date_from"],
+		},
+		"required_permissions": [
+			{"doctype": "Sales Order", "ptype": "read"},
+		],
+	},
+	{
+		"tool_id": "compare_sales_periods",
+		"description": (
+			"One period's sales against another's, with the differences already "
+			"worked out. Returns {current, baseline, currency, change, coverage}; "
+			"`change` carries {current, baseline, absolute, percent} for revenue, "
+			"units, orders and average order value.\n\n"
+			"Use this rather than calling get_sales_summary twice and subtracting. "
+			"\"Versus last month\", \"how does this compare to last year\", \"are "
+			"we up or down\" are all this tool, and the arithmetic is the part that "
+			"goes wrong in prose.\n\n"
+			"`compare_to: previous_period` measures against the same number of days "
+			"immediately before, so a 30-day window meets a 30-day window. "
+			"`previous_year` shifts the same dates back 365 days, which is the right "
+			"comparison for anything seasonal. Give explicit `baseline_from` and "
+			"`baseline_to` instead when the question names both periods.\n\n"
+			"A null `percent` is an answer, not a gap: it means the baseline was "
+			"zero, and there is no percentage change from nothing. Report the "
+			"absolute figure and say the baseline was zero — never write \"infinite\" "
+			"or invent a percentage. Always name the baseline dates from `baseline`, "
+			"because \"up 12%\" without saying against what is not a finding. Gross "
+			"merchandise value on both sides, not a payout."
+		),
+		"handler": f"{_API}.compare_sales_periods",
+		"parameters_schema": {
+			"type": "object",
+			"properties": {
+				**_period_schema("Required here — a comparison needs both ends."),
+				"compare_to": {
+					"type": "string",
+					"enum": ["previous_period", "previous_year"],
+					"description": (
+						"Which baseline to measure against. Defaults to "
+						"previous_period. Ignored when baseline_from is given."
+					),
+				},
+				"baseline_from": {
+					"type": "string",
+					"description": (
+						"Optional. First day of an explicit baseline period, "
+						"YYYY-MM-DD. Use when the question names both periods."
+					),
+				},
+				"baseline_to": {
+					"type": "string",
+					"description": "Optional. Last day of the explicit baseline period.",
+				},
+				"fulfillment_network": {
+					"type": "string",
+					"enum": _FULFILLMENT_NETWORKS,
+					"description": "Optional, and applied to both periods. AFN is FBA.",
+				},
+			},
+			"required": ["date_from", "date_to"],
+		},
+		"required_permissions": [
+			{"doctype": "Sales Order", "ptype": "read"},
+		],
+	},
+	{
+		"tool_id": "list_amazon_orders",
+		"description": (
+			"The individual Amazon orders behind the sales figures, paged. Returns "
+			"{total, page_no, page_size, has_more, orders}, each order carrying "
+			"{amazon_order_id, sales_order, transaction_date, amazon_order_status, "
+			"fulfillment_network, units, order_currency, amazon_order_total, "
+			"product_sales, order_total, counts_as_sold}.\n\n"
+			"Use it to drill into a summary — \"show me those orders\", \"what did "
+			"we sell on the 3rd\", \"every order for this SKU\" — and when someone "
+			"wants a spreadsheet of orders, because this is the row-shaped result "
+			"`export_csv` needs. Report `total` alongside the page.\n\n"
+			"Unlike the summary tools this one shows EVERY order in the window, "
+			"including cancelled ones and still-Pending ones. `counts_as_sold` is "
+			"which rows the sales totals were built from: a false row is excluded "
+			"from every figure the other tools return, and adding these rows up by "
+			"hand will not reproduce those figures. Do not try — call "
+			"get_sales_summary for a total.\n\n"
+			"`product_sales` and `order_total` are in the company currency; "
+			"`amazon_order_total` is Amazon's own figure in `order_currency`, which "
+			"can differ per order. A Pending order's totals are near zero because "
+			"Amazon withholds pricing until it confirms, not because it was cheap."
+		),
+		"handler": f"{_API}.list_amazon_orders",
+		"parameters_schema": {
+			"type": "object",
+			"properties": {
+				**_period_schema("Defaults to today."),
+				"status": {
+					"type": "string",
+					"description": (
+						"Optional. Amazon's own OrderStatus, exactly as it spells "
+						"it: Pending, Unshipped, PartiallyShipped, Shipped, "
+						"Canceled, Unfulfillable."
+					),
+				},
+				"fulfillment_network": {
+					"type": "string",
+					"enum": _FULFILLMENT_NETWORKS,
+					"description": "Optional. AFN is FBA, MFN is merchant-fulfilled.",
+				},
+				"sku": {
+					"type": "string",
+					"description": (
+						"Optional. Only orders containing this seller SKU. An exact "
+						"SKU, not a search term."
+					),
+				},
+				"page_no": {
+					"type": "integer",
+					"description": "1-based page number. Defaults to 1, 20 rows a page.",
+					"minimum": 1,
+				},
+			},
+			"required": ["date_from"],
+		},
+		"required_permissions": [
+			{"doctype": "Sales Order", "ptype": "read"},
+		],
+	},
+	{
+		"tool_id": "get_amazon_order_metrics",
+		"description": (
+			"Amazon's OWN sales figures for this account, read live from Amazon. "
+			"Returns {period, currency, totals, buckets} with total_sales, units, "
+			"order_items, order_count and avg_unit_price per bucket.\n\n"
+			"This is the authoritative topline and the one to quote when someone "
+			"asks what they sold. Everything else in this pack computes sales from "
+			"the orders that synced to this site; this is what Amazon says, whether "
+			"or not anything synced at all, so it also answers when "
+			"get_orders_sync_status shows no local coverage.\n\n"
+			"It will not match get_sales_summary exactly, and the difference is "
+			"worth reporting rather than resolving. This answers for the "
+			"connection's primary marketplace alone, while the local tools cover "
+			"every marketplace that has synced — get_sales_summary's "
+			"`period.marketplaces` lists which, and more than one there explains most "
+			"of a gap on its own. Beyond that, Amazon buckets by its own day boundary "
+			"in the marketplace time zone; the local figures bucket by purchase date "
+			"in this site's time zone, exclude orders the sync has not reached, and "
+			"drop cancellations at a different moment. When both are in hand, quote "
+			"this as the figure and use the local tools for the breakdown by SKU, "
+			"which this cannot give.\n\n"
+			"Optionally filters to one `asin` or one `sku`, never both. Costs one "
+			"live Amazon call and needs the Selling Partner Insights role on the "
+			"SP-API app — if it comes back saying the role is missing, that is the "
+			"answer, and the local sales tools still work. Amazon accepts at most "
+			"730 days in one call. This is ordered product sales, still not a payout: "
+			"Amazon's fees are not deducted here either."
+		),
+		"handler": f"{_API}.get_amazon_order_metrics",
+		"parameters_schema": {
+			"type": "object",
+			"properties": {
+				**_period_schema("Defaults to today."),
+				"granularity": {
+					"type": "string",
+					"enum": _SALES_GRANULARITIES,
+					"description": (
+						"How Amazon should bucket the period. Defaults to day. Use "
+						"`total` for one figure covering the whole period."
+					),
+				},
+				"fulfillment_network": {
+					"type": "string",
+					"enum": _FULFILLMENT_NETWORKS,
+					"description": "Optional. AFN is fulfilled by Amazon, MFN by the seller.",
+				},
+				"asin": {
+					"type": "string",
+					"description": "Optional. Amazon's product id. Pass this OR `sku`.",
+				},
+				"sku": {
+					"type": "string",
+					"description": "Optional. This seller's own SKU. Pass this OR `asin`.",
+				},
+			},
+			"required": ["date_from"],
+		},
 		"required_permissions": [],
 	},
 	{
