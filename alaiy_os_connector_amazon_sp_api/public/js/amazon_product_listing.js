@@ -1,8 +1,9 @@
 // Copyright (c) 2026, Alaiy and contributors
 // For license information, please see license.txt
 //
-// Amazon Product Listing form: publish to Amazon, end the listing, re-sync, and
-// (for new rows) a catalog-search -> create-offer flow.
+// Amazon Product Listing form: publish to Amazon, create the catalog entry for a
+// product Amazon has never listed, end the listing, re-sync, and (for new rows) a
+// catalog-search -> create-offer flow.
 //
 // "Publish" is one button for what used to be two decisions. It previews first
 // (api.preview_publish), and the preview says which the row needs: Amazon has no
@@ -43,6 +44,18 @@ frappe.ui.form.on("Amazon Product Listing", {
 			() => amazon_publish_row(frm),
 			__("Amazon")
 		).addClass("btn-primary");
+
+		// Only for a row Amazon has no catalog entry for, and never as the primary
+		// action. Publishing puts an offer on an ASIN that exists; this asks Amazon
+		// to mint one, which is public and has no undo — so it appears only where
+		// it is the row's only route to Amazon, and says so before it submits.
+		if (!frm.doc.asin) {
+			frm.add_custom_button(
+				__("Create on Amazon"),
+				() => amazon_create_asin(frm),
+				__("Amazon")
+			);
+		}
 
 		frm.add_custom_button(__("Sync from Amazon"), () => amazon_sync(frm), __("Amazon"));
 
@@ -257,6 +270,92 @@ function amazon_review_publish(frm, comparison) {
 			<tbody>${rows}</tbody>
 		</table>
 		${warning}`);
+	d.show();
+}
+
+// Creating the catalog entry, as opposed to publishing an offer against one.
+//
+// Preview first, always: what Amazon requires is a property of the product type
+// and is read from its schema, so the blockers are the substance of the answer
+// for most rows and the only way to learn them without submitting. The confirm
+// step is not ceremony either — a catalog entry becomes a public ASIN other
+// sellers can list against, and there is nothing to press afterwards to undo it.
+function amazon_create_asin(frm) {
+	frappe.call({
+		method: "alaiy_os_connector_amazon_sp_api.api.preview_asin_creation",
+		args: { sku: frm.doc.sku, marketplace: frm.doc.marketplace },
+		freeze: true,
+		freeze_message: __("Checking what Amazon requires for this product type…"),
+		callback: (r) => amazon_review_asin_creation(frm, r.message || {}),
+	});
+}
+
+function amazon_review_asin_creation(frm, preview) {
+	const blockers = preview.blockers || [];
+	if (blockers.length) {
+		frappe.msgprint({
+			title: __("Not ready to create"),
+			indicator: "red",
+			message: `<ul>${blockers
+				.map((b) => `<li>${frappe.utils.escape_html(b)}</li>`)
+				.join("")}</ul>`,
+		});
+		return;
+	}
+
+	const required = preview.required || [];
+	const attributes = Object.keys(preview.attributes || {}).sort();
+	const warnings = (preview.warnings || [])
+		.map((w) => `<p class="text-warning small">${frappe.utils.escape_html(w)}</p>`)
+		.join("");
+
+	const d = new frappe.ui.Dialog({
+		title: __("Create on Amazon"),
+		size: "large",
+		fields: [{ fieldtype: "HTML", fieldname: "summary" }],
+		primary_action_label: __("Create on Amazon"),
+		primary_action() {
+			d.hide();
+			frappe.call({
+				method: "alaiy_os_connector_amazon_sp_api.api.create_asin",
+				args: { sku: frm.doc.sku, marketplace: frm.doc.marketplace },
+				freeze: true,
+				freeze_message: __("Submitting the product to Amazon…"),
+				callback: (r) => {
+					const result = r.message || {};
+					frappe.show_alert({
+						message: result.submission_id
+							? __("Submitted as {0}. The ASIN appears here once Amazon has created it.", [
+									frappe.utils.escape_html(result.submission_id),
+								])
+							: __("Submitted. The ASIN appears here once Amazon has created it."),
+						indicator: "green",
+					});
+					frm.reload_doc();
+				},
+			});
+		},
+	});
+	d.fields_dict.summary.$wrapper.html(`
+		<p>${__(
+			"This asks Amazon to add the product to its catalog and give it a <b>new ASIN</b>. It is not an offer against an existing one, and it cannot be undone."
+		)}</p>
+		<p class="text-muted">${__("Submitted as product type")} <b>${frappe.utils.escape_html(
+			preview.product_type || ""
+		)}</b>. ${__(
+			"Amazon creates the entry asynchronously — this row stays pending until the entry exists."
+		)}</p>
+		<p><b>${__("Attributes being submitted")}</b></p>
+		<p>${attributes
+			.map(
+				(name) =>
+					`<code>${frappe.utils.escape_html(name)}${required.includes(name) ? " *" : ""}</code>`
+			)
+			.join(" ")}</p>
+		<p class="text-muted small">${__(
+			"* required by this product type. Anything Amazon requires that no listing field holds goes in Extra Attributes on this row."
+		)}</p>
+		${warnings}`);
 	d.show();
 }
 
