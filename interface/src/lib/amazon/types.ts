@@ -450,6 +450,15 @@ export interface AmazonAsinCreatePreview {
   blockers: string[];
   warnings: string[];
   ready: boolean;
+  /**
+   * A filled-in Extra Attributes object for what the row still owes Amazon —
+   * generated from the product type's schema and merged with what the field
+   * already holds, so it can be pasted back whole. Placeholder values.
+   *
+   * Only attributes with no listing field behind them: the rest are fields to
+   * fill in, and offering JSON for those would create two sources for one value.
+   */
+  suggested_extra_attributes: Record<string, unknown>;
 }
 
 /**

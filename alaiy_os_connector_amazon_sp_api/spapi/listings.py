@@ -1808,14 +1808,68 @@ def asin_create_blockers(row, attributes, schema):
 		)
 		return blockers
 
-	missing = [name for name in product_types.required_attributes(schema) if name not in attributes]
-	for name in missing:
-		blockers.append(
-			_("Amazon requires '{0}' ({1}) for product type {2}. Add it under Extra Attributes.").format(
-				product_types.attribute_title(schema, name), name, row.get("product_type")
-			)
-		)
+	for name in missing_required(attributes, schema):
+		blockers.append(_missing_attribute_blocker(row, schema, name))
 	return blockers
+
+
+# Required attributes a listing field already feeds, and the field that feeds
+# them. Telling an operator to hand-write JSON for something with a box on the
+# form in front of them is worse than saying nothing: it is a wrong instruction
+# that works, leaving two sources for one value and the form's copy silently
+# losing. Kept beside _catalog_attributes, which is what makes it true.
+_ATTRIBUTE_FIELDS = {
+	"item_name": _("Title"),
+	"brand": _("Brand"),
+	"product_description": _("Description"),
+	"bullet_point": _("Bullet Points"),
+	"generic_keyword": _("Keywords"),
+	"main_product_image_locator": _("Images"),
+	"purchasable_offer": _("Price"),
+	"fulfillment_availability": _("Quantity"),
+	"condition_type": _("Condition"),
+	"externally_assigned_product_identifier": _("Product ID"),
+}
+
+
+def missing_required(attributes, schema):
+	"""Required attribute names the submission would not carry."""
+	return [name for name in product_types.required_attributes(schema) if name not in attributes]
+
+
+def _missing_attribute_blocker(row, schema, name):
+	"""One missing attribute, phrased as the thing to go and do about it.
+
+	Which thing depends on where the value belongs. An attribute with a field
+	behind it is a field to fill in; only the rest are Extra Attributes, and for
+	those the accepted values are worth naming — `country_of_origin` is an enum of
+	several hundred codes and no operator is going to guess `IN` from a title that
+	reads "country-of-origin".
+	"""
+	title = product_types.attribute_title(schema, name)
+	product_type = row.get("product_type")
+	field = _ATTRIBUTE_FIELDS.get(name)
+	if field:
+		return _("Amazon requires '{0}' ({1}) for product type {2}. Fill in {3} on this row.").format(
+			title, name, product_type, field
+		)
+
+	shown, total = product_types.attribute_options(schema, name)
+	if shown:
+		listed = ", ".join(shown)
+		accepted = (
+			_(" Accepted values include: {0} (and {1} more).").format(listed, total - len(shown))
+			if total > len(shown)
+			else _(" Accepted values: {0}.").format(listed)
+		)
+	else:
+		accepted = ""
+	return (
+		_("Amazon requires '{0}' ({1}) for product type {2}. Add it under Extra Attributes.").format(
+			title, name, product_type
+		)
+		+ accepted
+	)
 
 
 def preview_asin_creation(sku, marketplace=None):
@@ -1841,7 +1895,28 @@ def preview_asin_creation(sku, marketplace=None):
 		"blockers": blockers,
 		"warnings": _create_warnings(row),
 		"ready": not blockers,
+		# A filled-in form for the Extra Attributes box, rather than a description
+		# of one. Only the attributes with no field behind them: the rest are
+		# fields to fill in, and offering JSON for those would invite two sources
+		# for one value.
+		"suggested_extra_attributes": _suggested_extra_attributes(mp, row, attributes, schema),
 	}
+
+
+def _suggested_extra_attributes(mp, row, attributes, schema):
+	"""A paste-ready Extra Attributes object for what this row still owes Amazon.
+
+	Merged onto whatever the row already holds, so pasting it back does not
+	discard an attribute the operator entered earlier.
+	"""
+	if schema is None:
+		return {}
+	stub = dict(_extra_attributes(row))
+	for name in missing_required(attributes, schema):
+		if name in _ATTRIBUTE_FIELDS:
+			continue
+		stub[name] = product_types.attribute_example(schema, name, mp.marketplace_id)
+	return stub
 
 
 def create_asin(sku, marketplace=None):
