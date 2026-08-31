@@ -1164,6 +1164,210 @@ def variation_family(parent_asin, marketplace=None):
 	}
 
 
+# --- register reads ----------------------------------------------------------
+# Two reads that answer over the Amazon Product Listing rows rather than over
+# Amazon, like `variation_family` above them. They are the only reads in this
+# module that do not have to be handed an id first, which is what makes them
+# where an answer starts: everything else needs a SKU or an ASIN that something
+# else has to supply.
+#
+# Both are therefore only as fresh as the last sync, and both return
+# `last_synced_at` rather than leave that to be assumed. Worth remembering when
+# reporting from them: the register records what was last *submitted*, so a
+# change Amazon rejected still reads here as though it went through.
+# `remote_snapshot` is what asks Amazon.
+
+# A page small enough to read back to a person. The cap is about the answer the
+# rows are retyped into, not about what the query could return.
+LIST_DEFAULT_PAGE_SIZE = 20
+LIST_MAX_PAGE_SIZE = 50
+
+# Issues are child rows, so one suppressed SKU can contribute several and a
+# count of them is not a count of listings. Past this many the useful answer is
+# "you have a lot of these" plus an export, not a longer list.
+ISSUE_DEFAULT_LIMIT = 50
+ISSUE_MAX_LIMIT = 200
+
+# What a register row is worth reporting without opening it. `currency` travels
+# with `price` deliberately — a bare number is the one field here that is wrong
+# rather than incomplete when its unit is dropped.
+_REGISTER_FIELDS = (
+	"name as sku",
+	"title",
+	"asin",
+	"listing_status",
+	"fulfillment_channel",
+	"price",
+	"currency",
+	"quantity",
+	"marketplace",
+	"parent_asin",
+	"is_variation_parent",
+	"last_synced_at",
+)
+
+
+def _select_options(doctype, fieldname):
+	"""A Select field's own options, so a caller-facing list cannot drift from it."""
+	field = frappe.get_meta(doctype).get_field(fieldname)
+	return [o.strip() for o in (field.options or "").split("\n") if o.strip()]
+
+
+def _validated_select(value, doctype, fieldname, label):
+	"""`value` if the Select allows it, else a throw that names what it does allow.
+
+	Filtering on an unknown value would come back as an empty page instead, which
+	reads exactly like a seller who has none of that kind — the one failure worth
+	spending an error on, because nothing downstream can tell the two apart.
+	"""
+	options = _select_options(doctype, fieldname)
+	if value not in options:
+		frappe.throw(
+			_("Unknown {0} {1}. One of: {2}.").format(label, value, ", ".join(options))
+		)
+	return value
+
+
+def list_listings(
+	status=None,
+	fulfillment_channel=None,
+	search=None,
+	page_no=1,
+	page_size=None,
+	marketplace=None,
+):
+	"""A page of the register: which SKUs this seller lists, and the state of each.
+
+	Ordered by SKU, so a page boundary means the same thing on the next call —
+	a relevance order would quietly reshuffle under a caller paging through.
+	`total` is the unpaginated count, which is what lets an answer carry an honest
+	denominator instead of implying the page is all of it.
+
+	`search` matches SKU, title or ASIN. It is a substring match on purpose: the
+	thing a person half-remembers about a listing is a fragment of one of those
+	three, and an exact-match tool for a SKU already exists in every other read
+	here.
+	"""
+	filters = {}
+	if status:
+		filters["listing_status"] = _validated_select(
+			status, "Amazon Product Listing", "listing_status", "listing status"
+		)
+	if fulfillment_channel:
+		filters["fulfillment_channel"] = _validated_select(
+			fulfillment_channel,
+			"Amazon Product Listing",
+			"fulfillment_channel",
+			"fulfillment channel",
+		)
+	if marketplace:
+		filters["marketplace"] = marketplace
+
+	or_filters = {}
+	search = str(search or "").strip()
+	if search:
+		term = f"%{search}%"
+		or_filters = {"name": ["like", term], "title": ["like", term], "asin": ["like", term]}
+
+	page_no = max(cint(page_no), 1)
+	page_size = min(cint(page_size) or LIST_DEFAULT_PAGE_SIZE, LIST_MAX_PAGE_SIZE)
+
+	rows = frappe.get_all(
+		"Amazon Product Listing",
+		filters=filters,
+		or_filters=or_filters,
+		fields=list(_REGISTER_FIELDS),
+		order_by="name asc",
+		start=(page_no - 1) * page_size,
+		page_length=page_size,
+	)
+
+	# Counted through get_all rather than db.count so the `search` or_filters are
+	# included; db.count takes filters only, and a total that ignored the search
+	# would be a bigger lie than no total at all.
+	total = frappe.get_all(
+		"Amazon Product Listing",
+		filters=filters,
+		or_filters=or_filters,
+		fields=["count(name) as total"],
+	)[0]["total"]
+
+	return {
+		"total": total,
+		"page_no": page_no,
+		"page_size": page_size,
+		"has_more": page_no * page_size < total,
+		"listings": rows,
+	}
+
+
+def listing_issues(sku=None, severity=None, limit=None):
+	"""What Amazon says is wrong with a listing — the issue rows the last read wrote.
+
+	Scoped to one SKU, or across the whole register when `sku` is omitted, which is
+	the "what is wrong with my listings" answer nothing else here can give.
+
+	The child rows are replaced wholesale every time a SKU is read or written (see
+	`_upsert_from_item`), so these are the issues Amazon reported as of the row's
+	`last_synced_at` — not necessarily the issues Amazon would report now, and a
+	listing fixed since still carries its old ones until it is re-synced.
+
+	`skus_affected` counts listings, not rows: one suppressed SKU commonly carries
+	several issues, so the row count is the wrong number to report as "how many
+	listings have problems".
+	"""
+	limit = min(cint(limit) or ISSUE_DEFAULT_LIMIT, ISSUE_MAX_LIMIT)
+
+	filters = {"parenttype": "Amazon Product Listing", "parentfield": "suppression_reasons"}
+	if sku:
+		filters["parent"] = sku
+	if severity:
+		filters["severity"] = _validated_select(
+			str(severity).upper(), "Amazon Listing Issue", "severity", "severity"
+		)
+
+	# One over the limit, so `truncated` is a fact rather than an inference from a
+	# full page — a page that happens to be exactly `limit` long is not truncated.
+	rows = frappe.get_all(
+		"Amazon Listing Issue",
+		filters=filters,
+		fields=["parent as sku", "code", "severity", "message", "attribute_names"],
+		order_by="parent asc, severity asc",
+		limit=limit + 1,
+	)
+	truncated = len(rows) > limit
+	rows = rows[:limit]
+
+	# The issue rows carry no listing state of their own, and "is this SKU actually
+	# suppressed, or is this a warning on a live listing" is the first thing asked
+	# of them. One extra query for every SKU on the page, not one per row.
+	skus = sorted({row["sku"] for row in rows})
+	state = {}
+	if skus:
+		state = {
+			row["name"]: row
+			for row in frappe.get_all(
+				"Amazon Product Listing",
+				filters={"name": ["in", skus]},
+				fields=["name", "title", "asin", "listing_status", "marketplace", "last_synced_at"],
+			)
+		}
+	for row in rows:
+		listing = state.get(row["sku"]) or {}
+		row["title"] = listing.get("title")
+		row["asin"] = listing.get("asin")
+		row["listing_status"] = listing.get("listing_status")
+		row["marketplace"] = listing.get("marketplace")
+		row["last_synced_at"] = listing.get("last_synced_at")
+
+	return {
+		"issues": rows,
+		"count": len(rows),
+		"skus_affected": len(skus),
+		"truncated": truncated,
+	}
+
+
 # --- bulk sync (searchListingsItems) -----------------------------------------
 # searchListingsItems returns at most 1000 SKUs per marketplace but includes
 # rich content (summaries/offers/issues). For catalogs beyond that cap, use

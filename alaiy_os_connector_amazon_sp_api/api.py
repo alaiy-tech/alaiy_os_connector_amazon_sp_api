@@ -8,6 +8,11 @@ Phase 2: catalog search, product-type lookup, listing create/update/delete/sync,
         Creating the *catalog entry* for a product Amazon has never listed is its
         own verb (`create_asin`), deliberately not folded into publish.
 Phase 4: Seller Central order sync into Sales Orders.
+
+The register reads (list_listings, get_listing_issues) and the two helpers over
+them (get_listing_link, export_csv) call no Amazon API at all. They are gated on
+the doctype they touch rather than on the manager roles, because what they read
+is what the sync already wrote — same reasoning as `variation_family`.
 """
 
 import json
@@ -16,7 +21,7 @@ import frappe
 from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
-from alaiy_os_connector_amazon_sp_api import oauth
+from alaiy_os_connector_amazon_sp_api import csv_export, links, oauth
 from alaiy_os_connector_amazon_sp_api.spapi import (
 	health,
 	listings,
@@ -481,6 +486,71 @@ def variation_family(parent_asin, marketplace=None):
 	"""
 	frappe.has_permission("Amazon Product Listing", "read", throw=True)
 	return listings.variation_family(parent_asin, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def list_listings(
+	status=None,
+	fulfillment_channel=None,
+	search=None,
+	page_no=1,
+	page_size=None,
+	marketplace=None,
+):
+	"""A page of the register — which SKUs are listed, and the state of each.
+
+	Read-only and hits no Amazon API: it reads the Amazon Product Listing rows the
+	sync wrote, so it is gated on read permission for the register rather than on
+	the manager roles the write endpoints require, same as `variation_family`.
+
+	This is the one read here that answers without being handed an id first, which
+	makes it where a caller with only a description of a listing starts.
+	"""
+	frappe.has_permission("Amazon Product Listing", "read", throw=True)
+	return listings.list_listings(
+		status=status,
+		fulfillment_channel=fulfillment_channel,
+		search=search,
+		page_no=page_no,
+		page_size=page_size,
+		marketplace=marketplace,
+	)
+
+
+@frappe.whitelist()
+def get_listing_issues(sku=None, severity=None, limit=None):
+	"""What Amazon says is wrong with a listing, or with every listing.
+
+	Reads the `suppression_reasons` child rows the last read of each SKU wrote, so
+	it is as fresh as that row's `last_synced_at` and gated like the register reads
+	above. `sync_listing` is what refreshes one; nothing here calls Amazon.
+	"""
+	frappe.has_permission("Amazon Product Listing", "read", throw=True)
+	return listings.listing_issues(sku=sku, severity=severity, limit=limit)
+
+
+@frappe.whitelist()
+def get_listing_link(sku=None, asin=None, marketplace=None):
+	"""The buyer's product page and the Seller Central page for one listing.
+
+	Formats URLs out of ids; makes no Amazon call. Gated on the register because a
+	SKU is looked up there to find its ASIN — see links.py for why a missing piece
+	comes back as a stated absence rather than a guessed URL.
+	"""
+	frappe.has_permission("Amazon Product Listing", "read", throw=True)
+	return links.listing_link(sku=sku, asin=asin, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def export_csv(rows_json, filename="export", columns=""):
+	"""Write rows a caller already holds to a private CSV File, and return its URL.
+
+	Gated on File create rather than on the register: the rows arrive in the
+	argument, so this endpoint reads nothing, and what it needs permission for is
+	the file it writes. Whatever produced the rows was gated when it did.
+	"""
+	frappe.has_permission("File", "create", throw=True)
+	return csv_export.export_csv(rows_json, filename=filename, columns=columns)
 
 
 @frappe.whitelist()
