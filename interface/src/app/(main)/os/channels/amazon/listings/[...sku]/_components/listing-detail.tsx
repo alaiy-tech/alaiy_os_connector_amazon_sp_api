@@ -30,6 +30,7 @@ import {
   CloudDownload,
   CloudUpload,
   ExternalLink,
+  PackagePlus,
   RefreshCw,
   TriangleAlert,
 } from "lucide-react";
@@ -59,6 +60,7 @@ import { marketplaceName, useMarketplaces } from "@/components/amazon/marketplac
 import { IssueSeverityBadge, ListingStatusBadge } from "@/components/amazon/status-badge";
 import { LinkField } from "@/components/amazon/link-field";
 import { ImageListEditor } from "./image-list-editor";
+import { CreateAsinDialog } from "./create-asin-dialog";
 import { PushDialog } from "./push-dialog";
 import { StringListEditor } from "./string-list-editor";
 import { VariationFamilyCard } from "./variation-family";
@@ -104,6 +106,7 @@ export function ListingDetail({ sku }: { sku: string }) {
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pushOpen, setPushOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   const reload = useCallback(() => setReloadToken((token) => token + 1), []);
@@ -263,6 +266,17 @@ export function ListingDetail({ sku }: { sku: string }) {
             <Button onClick={() => setPushOpen(true)} disabled={busy || !connected}>
               <CloudUpload /> Publish to Amazon
             </Button>
+            {/*
+              Only for a row with no ASIN, and never as the default action. A row
+              that has one needs an offer, not a second catalog entry for a
+              product Amazon already lists — and creating one is the irreversible
+              half of this screen.
+            */}
+            {!doc.asin && (
+              <Button variant="outline" onClick={() => setCreateOpen(true)} disabled={busy || !connected}>
+                <PackagePlus /> Create on Amazon
+              </Button>
+            )}
             <Button variant="outline" onClick={() => void syncFromAmazon()} disabled={busy || !connected}>
               <CloudDownload /> Sync from Amazon
             </Button>
@@ -479,6 +493,14 @@ export function ListingDetail({ sku }: { sku: string }) {
           currency={doc.currency}
         />
       )}
+
+      <CreateAsinDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        sku={doc.sku}
+        marketplace={doc.marketplace ?? undefined}
+        onCreated={reload}
+      />
 
       <PushDialog
         open={pushOpen}

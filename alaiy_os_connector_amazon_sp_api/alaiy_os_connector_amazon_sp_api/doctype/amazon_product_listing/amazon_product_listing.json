@@ -11,6 +11,8 @@
   "title",
   "asin",
   "product_type",
+  "product_id",
+  "product_id_type",
   "brand",
   "product",
   "column_break_ident",
@@ -34,12 +36,14 @@
   "images",
   "bullet_points",
   "keywords",
+  "extra_attributes",
   "issues_section",
   "suppression_reasons",
   "sync_section",
   "last_synced_at",
   "catalog_synced_at",
   "last_published_at",
+  "submission_id",
   "last_publish_error",
   "raw_summary"
  ],
@@ -71,6 +75,19 @@
    "in_standard_filter": 1,
    "label": "Product Type",
    "description": "Amazon's product type for this listing, e.g. SHIRT or LUGGAGE. Picked by Search Catalog before publishing an offer, and refreshed from the summary on every sync. Every write to Amazon has to declare it, so a row without one cannot be updated."
+  },
+  {
+   "fieldname": "product_id",
+   "fieldtype": "Data",
+   "label": "Product ID (GTIN/EAN/UPC)",
+   "description": "The barcode Amazon identifies this product by when creating a new ASIN. Leave empty if the brand holds a GTIN exemption."
+  },
+  {
+   "fieldname": "product_id_type",
+   "fieldtype": "Select",
+   "label": "Product ID Type",
+   "options": "\nEAN\nUPC\nGTIN\nISBN",
+   "depends_on": "product_id"
   },
   {
    "fieldname": "brand",
@@ -224,6 +241,13 @@
    "description": "Search terms (generic_keyword attribute)."
   },
   {
+   "fieldname": "extra_attributes",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Extra Attributes",
+   "description": "A JSON object of additional Amazon attributes, keyed by attribute name, merged into a new-ASIN submission verbatim. This is how a product type's required attributes that no listing field holds (country_of_origin, recommended_browse_nodes, ...) get supplied. Ignored when publishing an offer against an existing ASIN."
+  },
+  {
    "fieldname": "issues_section",
    "fieldtype": "Section Break",
    "label": "Issues"
@@ -258,6 +282,13 @@
    "label": "Last Published At",
    "read_only": 1,
    "description": "When a publish last submitted this row to Amazon -- a created offer or an accepted update, not a publish that found nothing to send."
+  },
+  {
+   "fieldname": "submission_id",
+   "fieldtype": "Data",
+   "label": "Last Submission ID",
+   "read_only": 1,
+   "description": "Amazon's id for the last write submitted for this SKU. A submission is accepted before it is applied; this is what the pending-submission reconciler follows up."
   },
   {
    "fieldname": "last_publish_error",
