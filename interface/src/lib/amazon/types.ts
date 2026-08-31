@@ -427,3 +427,40 @@ export function pushImages(doc: AmazonListingDoc | null): AmazonPushImage[] {
     .filter((row) => (row.image_url ?? "").trim() !== "")
     .map((row) => ({ url: row.image_url, is_main: row.is_main === 1 }));
 }
+
+/**
+ * What creating a *catalog entry* would submit — a different thing from
+ * publishing an offer, and the preview says so by what it carries.
+ *
+ * There is no `changes` and no `remote`: nothing exists on Amazon to diff
+ * against, which is the whole reason this path exists. `blockers` is therefore
+ * the substance of the answer — each entry names a requirement of the product
+ * type and what to do about it — and `attributes` is the payload a ready row
+ * would send, so the operator agrees to a submission rather than to a button.
+ */
+export interface AmazonAsinCreatePreview {
+  sku: string;
+  marketplace: string;
+  product_type?: string | null;
+  listing_status?: AmazonListingStatus | null;
+  /** The Amazon attribute payload, keyed by attribute name. */
+  attributes: Record<string, unknown>;
+  /** Attribute names this product type requires, from Amazon's own schema. */
+  required: string[];
+  blockers: string[];
+  warnings: string[];
+  ready: boolean;
+}
+
+/**
+ * The answer to a creation. No ASIN in it — Amazon accepts the submission before
+ * it mints one, so `submission_id` is what identifies the wait and the row sits
+ * at `pending` until the submission reconciler settles it.
+ */
+export interface AmazonAsinCreateResult {
+  sku: string;
+  action: "submitted";
+  submission_id?: string | null;
+  listing_status?: AmazonListingStatus | null;
+  issues?: AmazonListingIssue[];
+}

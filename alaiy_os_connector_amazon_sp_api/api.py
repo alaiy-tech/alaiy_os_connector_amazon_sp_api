@@ -5,6 +5,8 @@
 Phase 1: connection status, connect URL, disconnect, ping, health sync/summary.
 Phase 2: catalog search, product-type lookup, listing create/update/delete/sync,
         and publish — one row or a selection, creating what Amazon does not have.
+        Creating the *catalog entry* for a product Amazon has never listed is its
+        own verb (`create_asin`), deliberately not folded into publish.
 Phase 4: Seller Central order sync into Sales Orders.
 """
 
@@ -15,7 +17,13 @@ from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
 from alaiy_os_connector_amazon_sp_api import oauth
-from alaiy_os_connector_amazon_sp_api.spapi import health, listings, product_types, reconcile
+from alaiy_os_connector_amazon_sp_api.spapi import (
+	health,
+	listings,
+	product_types,
+	reconcile,
+	submissions,
+)
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
 )
@@ -411,6 +419,49 @@ def _as_list(value):
 	if isinstance(value, str):
 		value = json.loads(value or "[]")
 	return list(value or [])
+
+
+# --- creating a catalog entry (a new ASIN) -----------------------------------
+# Separate from publish on purpose. Publishing an offer or an update is
+# correctable; minting a public ASIN is not, so it is asked for one row at a
+# time rather than reachable from a bulk selection. See spapi.listings.create_asin.
+@frappe.whitelist()
+def preview_asin_creation(sku, marketplace=None):
+	"""What creating this product on Amazon would submit. Read-only.
+
+	Returns {ready, blockers, warnings, attributes, required, ...}. `blockers` is
+	the whole answer for a row that cannot go — each entry names what to add and
+	where — and `attributes` is the payload a ready row would send.
+	"""
+	_require_manager()
+	return listings.preview_asin_creation(sku, marketplace=marketplace)
+
+
+@frappe.whitelist(methods=["POST"])
+def create_asin(sku, marketplace=None):
+	"""Ask Amazon to create a catalog entry for this SKU.
+
+	Returns {sku, action, submission_id, listing_status, issues}. There is no ASIN
+	in the answer: Amazon accepts the submission before it applies it, so the row
+	goes to `pending` and the scheduled submission reconciler fills in the ASIN
+	once the catalog entry exists.
+	"""
+	_require_manager()
+	return listings.create_asin(sku, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def get_pending_submissions():
+	"""Rows waiting on a write Amazon accepted but has not confirmed applying."""
+	_require_manager()
+	return submissions.pending_submissions()
+
+
+@frappe.whitelist(methods=["POST"])
+def reconcile_submissions():
+	"""Re-read every due pending submission now, instead of waiting for the job."""
+	_require_manager()
+	return submissions.reconcile_pending_submissions()
 
 
 @frappe.whitelist()

@@ -1,4 +1,6 @@
 import type {
+  AmazonAsinCreatePreview,
+  AmazonAsinCreateResult,
   AmazonCatalogMatch,
   AmazonCompareResult,
   AmazonConfigStatus,
@@ -453,6 +455,36 @@ export function publishListing(
  */
 export function publishListings(skus: string[], marketplace?: string): Promise<AmazonQueuedCount> {
   return post<AmazonQueuedCount>("publish_listings", { skus, marketplace }, "Could not start the publish.");
+}
+
+// ── creating a catalog entry (a new ASIN) ────────────────────────────────────
+// Deliberately not part of publish. Publishing an offer or an update is
+// correctable; a catalog entry becomes a public ASIN and is not, so it is asked
+// for one row at a time and never from a bulk selection.
+
+/**
+ * What creating this product on Amazon would submit. Read-only.
+ *
+ * Costs one product-type definitions call (cached server-side) and writes
+ * nothing. For a row that cannot go, `blockers` is the entire answer.
+ */
+export function previewAsinCreation(sku: string, marketplace?: string): Promise<AmazonAsinCreatePreview> {
+  return get<AmazonAsinCreatePreview>(
+    "preview_asin_creation",
+    { sku, marketplace },
+    "Could not work out what Amazon requires for this product type.",
+  );
+}
+
+/**
+ * Ask Amazon to create the catalog entry. Irreversible in the ordinary sense.
+ *
+ * Returns a `submission_id`, not an ASIN: Amazon accepts the submission before
+ * applying it, and the ASIN arrives on the row when the scheduled submission
+ * reconciler finds the listing readable.
+ */
+export function createAsin(sku: string, marketplace?: string): Promise<AmazonAsinCreateResult> {
+  return post<AmazonAsinCreateResult>("create_asin", { sku, marketplace }, "Amazon refused the product.");
 }
 
 // ── catalog search + drafting ────────────────────────────────────────────────

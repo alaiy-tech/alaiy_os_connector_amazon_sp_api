@@ -18,6 +18,8 @@
   "refresh_token",
   "column_break_creds",
   "primary_marketplace",
+  "catalog_section",
+  "gtin_exempt_brands",
   "orders_section",
   "orders_customer",
   "orders_company",
@@ -106,6 +108,17 @@
    "fieldtype": "Link",
    "label": "Primary Marketplace",
    "options": "Amazon Marketplace"
+  },
+  {
+   "fieldname": "catalog_section",
+   "fieldtype": "Section Break",
+   "label": "Catalog Creation"
+  },
+  {
+   "fieldname": "gtin_exempt_brands",
+   "fieldtype": "Small Text",
+   "label": "GTIN-Exempt Brands",
+   "description": "One brand per line. Amazon grants a GTIN exemption per brand (and sometimes per product type) in Seller Central; listing a brand here says that grant exists, so a new ASIN under it can be created without a barcode. Nothing here is verified with Amazon — a brand named without the grant is rejected at submission."
   },
   {
    "description": "Where synced Seller Central orders land. Orders are created as Sales Orders directly.",

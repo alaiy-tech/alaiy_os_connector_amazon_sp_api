@@ -47,6 +47,39 @@ PRODUCT_TYPE_DEFINITIONS_PATH = "/definitions/2020-09-01/productTypes"
 # an operator won't read.
 PRODUCT_TYPE_SUGGESTION_LIMIT = 10
 
+# getDefinitionsProductType returns the JSON Schema a product type's attributes
+# must satisfy. `LISTING` is the full set a *create* has to meet;
+# LISTING_OFFER_ONLY is the reduced set an offer against someone else's ASIN
+# meets, which is why publishing an offer never needed this call.
+PRODUCT_TYPE_DEFINITION_REQUIREMENTS = "LISTING"
+
+# The definition response carries a *link* to the schema, not the schema — a
+# presigned URL on Amazon's own storage, fetched without SP-API credentials.
+PRODUCT_TYPE_SCHEMA_TIMEOUT = 60
+
+# Schemas are large (hundreds of KB) and change on Amazon's release cadence, not
+# ours, so they are cached per product type + marketplace. A day is short enough
+# that a schema change reaches us the next morning and long enough that a bulk
+# creation across one product type pays for the fetch once.
+PRODUCT_TYPE_SCHEMA_CACHE_TTL = 24 * 60 * 60
+
+
+# --- accepted-but-not-yet-applied submissions --------------------------------
+# How long a submission is left alone before the reconciler first re-reads it.
+# Amazon has plausibly not processed it yet inside this window, so an earlier
+# read spends rate limit to be told 404.
+SUBMISSION_GRACE_MINUTES = 15
+
+# When an accepted submission stops being late and starts being lost. Amazon
+# gives no deadline; a creation that has not produced a readable listing in this
+# long has, in practice, been rejected somewhere the API does not report.
+SUBMISSION_MAX_AGE_HOURS = 24
+
+# Rows re-read per scheduled run. Each costs a Listings GET plus a catalog
+# look-up, and the job runs every 15 minutes, so this is a rate-limit budget
+# rather than a correctness limit — the backlog drains across runs.
+SUBMISSION_RECONCILE_BATCH = 100
+
 # searchCatalogItems accepts at most 20 values in `identifiers`, which is what
 # lets spapi.catalog fetch content for a whole page of listings in one call.
 CATALOG_MAX_IDENTIFIERS = 20
