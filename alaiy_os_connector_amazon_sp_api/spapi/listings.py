@@ -86,11 +86,32 @@ def _issues_from(response):
 	return out
 
 
-def _raise_on_error_issues(issues, action):
+def _raise_on_rejected_submission(response, issues, action):
+	"""Refuse a submission Amazon did not take — by status as well as by issue.
+
+	A Listings write answers with a `status` of ACCEPTED or INVALID alongside its
+	issues, and the status is the authoritative half: INVALID is a rejection
+	whether or not Amazon attached an ERROR issue explaining it. Reading only the
+	issues lets a bare INVALID through as a success, and the row is then stamped
+	`pending` for a submission that will never be applied — which reads, later, as
+	a write that silently did nothing.
+
+	ACCEPTED is not the same as applied. Amazon processes the submission
+	asynchronously and can still reject it afterwards; that is what `submissionId`
+	is for, and following it up is not something this function can do.
+	"""
 	errors = [i for i in issues if i["severity"] == "ERROR"]
+	invalid = ((response or {}).get("status") or "").upper() == "INVALID"
+	if not errors and not invalid:
+		return
 	if errors:
 		joined = "; ".join(f"[{i['code']}] {i['message']}" for i in errors)
 		frappe.throw(_("Amazon rejected the {0}: {1}").format(action, joined))
+	frappe.throw(
+		_("Amazon rejected the {0} (submission {1}) without giving a reason.").format(
+			action, (response or {}).get("submissionId") or _("unknown")
+		)
+	)
 
 
 # --- catalog search ----------------------------------------------------------
@@ -307,7 +328,7 @@ def create_listing(
 		_handle_forbidden(e)
 
 	issues = _issues_from(resp)
-	_raise_on_error_issues(issues, _("listing"))
+	_raise_on_rejected_submission(resp, issues, _("listing"))
 	# Re-fetch to capture Amazon's derived state, then upsert the register row.
 	#
 	# Amazon takes a create asynchronously, so the SKU it has just accepted can
@@ -438,11 +459,24 @@ def update_listing(sku, changes, marketplace=None):
 	except SpApiError as e:
 		if e.is_forbidden():
 			_handle_forbidden(e)
+		if e.status_code == 404:
+			# Amazon does not list this SKU at all, so there is no update to make.
+			# The PUT below would not be a fallback here, it would be a *create* —
+			# built from whatever the row happens to hold, for a listing nobody
+			# asked to bring into existence. Deciding between create and update is
+			# `publish_listing`'s job, and it reads the SKU from Amazon first.
+			frappe.throw(
+				_(
+					"SKU '{0}' is not a listing on this Amazon account (marketplace {1}), "
+					"so there is nothing to update. Publish it to create the offer."
+				).format(sku, mp.country or mp.marketplace_id),
+				title=_("Listing not found"),
+			)
 		# PATCH unsupported for this attribute/product-type -> full PUT rebuild.
 		resp = _put_fallback(client, conn, mp, sku, changes)
 
 	issues = _issues_from(resp)
-	_raise_on_error_issues(issues, _("update"))
+	_raise_on_rejected_submission(resp, issues, _("update"))
 	# Amazon's Listings API is asynchronous: the submission above is only
 	# *accepted*, not yet applied, so an immediate re-fetch would return the
 	# pre-update state and clobber the operator's edits. Persist the submitted
@@ -608,7 +642,7 @@ def delete_listing(sku, marketplace=None):
 		_handle_forbidden(e)
 
 	issues = _issues_from(resp)
-	_raise_on_error_issues(issues, _("deletion"))
+	_raise_on_rejected_submission(resp, issues, _("deletion"))
 
 	if frappe.db.exists("Amazon Product Listing", sku):
 		row = frappe.get_doc("Amazon Product Listing", sku)

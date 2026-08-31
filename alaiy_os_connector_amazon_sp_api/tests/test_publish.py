@@ -17,6 +17,9 @@ publish has no operator watching one row.
   * `_create_warnings` — the offers Amazon accepts and nobody can buy.
   * `_publish_error` — one line per failed row, because that line is the whole
 	report a bulk publish leaves on the row.
+  * `_raise_on_rejected_submission` — the other end of the same run: whether
+	Amazon took the write at all. A refusal read as a success stamps the row
+	`pending` and there is nothing left to notice it by.
 """
 
 import frappe
@@ -156,3 +159,44 @@ class TestPublishError(UnitTestCase):
 		# "" on the row would read as "no error" — which is what the row says
 		# when the publish worked.
 		self.assertEqual(listings._publish_error(TimeoutError()), "TimeoutError")
+
+
+class TestRejectedSubmission(UnitTestCase):
+	"""A Listings write is judged by `status` as well as by `issues`.
+
+	Both halves matter and they fail differently. ERROR issues say what Amazon
+	objected to, so they are what an operator gets shown; a bare INVALID says only
+	that the submission was refused, and letting it through as a success is worse
+	than an unhelpful message — the row would be stamped `pending` for a write
+	that will never be applied.
+	"""
+
+	def test_an_accepted_submission_with_no_issues_passes(self):
+		listings._raise_on_rejected_submission({"status": "ACCEPTED", "submissionId": "s-1"}, [], "listing")
+
+	def test_accepted_with_warnings_only_still_passes(self):
+		# Amazon accepts plenty of listings it has remarks about; only ERROR
+		# severity is a refusal.
+		issues = [{"code": "8541", "message": "Image is small.", "severity": "WARNING"}]
+		listings._raise_on_rejected_submission({"status": "ACCEPTED"}, issues, "listing")
+
+	def test_error_issues_are_reported_with_code_and_message(self):
+		issues = [{"code": "4001", "message": "Missing attribute.", "severity": "ERROR"}]
+		with self.assertRaises(frappe.ValidationError) as caught:
+			listings._raise_on_rejected_submission({"status": "INVALID"}, issues, "listing")
+		self.assertIn("[4001] Missing attribute.", str(caught.exception))
+
+	def test_invalid_without_issues_is_still_a_rejection(self):
+		# The regression this guards: reading `issues` alone, this response is
+		# indistinguishable from a clean accept.
+		with self.assertRaises(frappe.ValidationError) as caught:
+			listings._raise_on_rejected_submission({"status": "INVALID", "submissionId": "s-9"}, [], "update")
+		self.assertIn("s-9", str(caught.exception))
+
+	def test_a_response_without_a_status_falls_back_to_the_issues(self):
+		# DELETE answers without a submission status; nothing to judge but issues.
+		listings._raise_on_rejected_submission({}, [], "deletion")
+		with self.assertRaises(frappe.ValidationError):
+			listings._raise_on_rejected_submission(
+				{}, [{"code": "5000", "message": "No.", "severity": "ERROR"}], "deletion"
+			)
