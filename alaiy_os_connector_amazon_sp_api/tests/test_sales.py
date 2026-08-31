@@ -52,6 +52,14 @@ class TestPeriod(UnitTestCase):
 	def test_a_missing_start_is_refused(self):
 		self.assertRaises(frappe.ValidationError, sales._period, None)
 
+	def test_the_error_names_the_parameter_that_was_actually_missing(self):
+		"""compare_sales_periods validates two pairs; an error saying `date_from`
+		when `baseline_from` is what is missing sends a caller to the wrong
+		argument."""
+		with self.assertRaises(frappe.ValidationError) as caught:
+			sales._period(None, label="baseline_from")
+		self.assertIn("baseline_from", str(caught.exception))
+
 	def test_one_day_is_a_period(self):
 		start, end = sales._period("2026-08-01", "2026-08-01")
 		self.assertEqual(start, end)
@@ -288,6 +296,17 @@ class TestSoldFilter(UnitTestCase):
 		where, params = self._where(fulfillment_network="AFN")
 		self.assertIn("so.amazon_fulfillment_channel = %(fulfillment_network)s", where)
 		self.assertEqual(params["fulfillment_network"], "AFN")
+
+
+class TestLogContext(UnitTestCase):
+	def test_the_sales_context_is_one_the_log_doctype_accepts(self):
+		"""`SP-API Log.context` is a Select, so a context the options do not list
+		fails validation on insert. `client._log` swallows that, so the symptom
+		is not a broken call — it is every sales call quietly filing an error log
+		instead of the row it meant to write.
+		"""
+		options = frappe.get_meta("SP-API Log").get_field("context").options.split("\n")
+		self.assertIn("sales", options)
 
 
 class TestBucketSql(UnitTestCase):

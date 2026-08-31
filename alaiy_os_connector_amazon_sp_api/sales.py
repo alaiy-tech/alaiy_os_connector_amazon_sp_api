@@ -131,19 +131,23 @@ def _one_of(value, allowed, label, default=None):
 	return value
 
 
-def _period(date_from, date_to=None):
+def _period(date_from, date_to=None, label="date_from"):
 	"""A validated, inclusive (from, to) pair of dates.
 
 	`date_to` defaults to today rather than to `date_from`: "sales since March"
 	is a whole question, "sales on the single day of March 1st" is not the one
 	being asked.
+
+	`label` names the parameter in the error, because `compare_sales_periods`
+	validates two pairs and an error saying `date_from` when what was missing is
+	`baseline_from` sends a caller to fix the wrong argument.
 	"""
 	if not date_from:
-		frappe.throw(_("date_from is required (YYYY-MM-DD)."))
+		frappe.throw(_("{0} is required (YYYY-MM-DD).").format(label))
 	start = getdate(date_from)
 	end = getdate(date_to) if date_to else getdate(nowdate())
 	if start > end:
-		frappe.throw(_("date_from {0} is after date_to {1}.").format(start, end))
+		frappe.throw(_("{0} {1} is after {2} {3}.").format(label, start, label.replace("from", "to"), end))
 	return start, end
 
 
@@ -675,7 +679,7 @@ def compare_sales_periods(
 	"""
 	date_from, date_to = _period(date_from, date_to)
 	if baseline_from or baseline_to:
-		base_from, base_to = _period(baseline_from, baseline_to or baseline_from)
+		base_from, base_to = _period(baseline_from, baseline_to or baseline_from, label="baseline_from")
 		compare_to = "explicit"
 	else:
 		compare_to = _one_of(compare_to, COMPARE_BASELINES, "baseline", default="previous_period")
