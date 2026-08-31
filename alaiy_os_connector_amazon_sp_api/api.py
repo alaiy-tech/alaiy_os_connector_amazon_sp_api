@@ -8,11 +8,20 @@ Phase 2: catalog search, product-type lookup, listing create/update/delete/sync,
         Creating the *catalog entry* for a product Amazon has never listed is its
         own verb (`create_asin`), deliberately not folded into publish.
 Phase 4: Seller Central order sync into Sales Orders.
+Phase 5: sales reporting over those Sales Orders, plus Amazon's own topline
+        from the Sales API. Two sources answering one question on purpose —
+        see `sales.py` for what makes them disagree.
 
 The register reads (list_listings, get_listing_issues) and the two helpers over
 them (get_listing_link, export_csv) call no Amazon API at all. They are gated on
 the doctype they touch rather than on the manager roles, because what they read
 is what the sync already wrote — same reasoning as `variation_family`.
+
+The sales reads follow that rule rather than the manager one: they read Sales
+Orders and nothing else, so `Sales Order` read permission is what the code
+actually checks and what the pack declares. `get_amazon_order_metrics` is the
+exception and goes the other way — it is a live Amazon call, so it carries the
+manager gate that every other live call here does.
 """
 
 import json
@@ -21,7 +30,7 @@ import frappe
 from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
-from alaiy_os_connector_amazon_sp_api import csv_export, links, oauth
+from alaiy_os_connector_amazon_sp_api import csv_export, links, oauth, sales
 from alaiy_os_connector_amazon_sp_api.spapi import (
 	health,
 	listings,
@@ -29,6 +38,7 @@ from alaiy_os_connector_amazon_sp_api.spapi import (
 	reconcile,
 	submissions,
 )
+from alaiy_os_connector_amazon_sp_api.spapi import sales as spapi_sales
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	HEALTH_STATUS_UNKNOWN,
 )
@@ -662,13 +672,167 @@ def backfill_orders(date_from, date_to=None, marketplace=None):
 
 @frappe.whitelist()
 def get_orders_sync_status():
-	"""Watermark + counts for the connector panel's sync-status slot."""
+	"""Watermark + counts for the connector panel's sync-status slot.
+
+	Also the coverage window — the first and last order date the sync has
+	actually reached. That belongs here rather than on a tool of its own: it is
+	the same question as "is order sync working", and without it every figure the
+	sales reads return lies by omission, answering a period the sync never
+	covered with a confident zero.
+	"""
 	conn = frappe.get_cached_doc("Amazon Connection")
-	synced = 0
+	span = {"first_order_date": None, "last_order_date": None, "synced_orders": 0}
 	if frappe.db.exists("DocType", "Sales Order"):
-		synced = frappe.db.count("Sales Order", {"amazon_order_id": ["is", "set"]})
+		span = sales.coverage()
 	return {
 		"configured": bool(conn.orders_customer),
 		"last_sync_at": conn.last_orders_sync_at,
-		"synced_orders": synced,
+		"synced_orders": span["synced_orders"],
+		"first_order_date": span["first_order_date"],
+		"last_order_date": span["last_order_date"],
 	}
+
+
+# --- sales reporting (Phase 5) -----------------------------------------------
+# Local reads over the Sales Orders the order sync wrote. Gated on `Sales Order`
+# read rather than on the manager roles, for the same reason the register reads
+# are gated on `Amazon Product Listing`: what they read is what the sync already
+# wrote, and the doctype gate is the one the code can honestly declare.
+@frappe.whitelist()
+def get_sales_summary(
+	date_from,
+	date_to=None,
+	granularity="day",
+	fulfillment_network=None,
+	marketplace=None,
+):
+	"""Revenue, units, orders and average order value over a period, bucketed."""
+	frappe.has_permission("Sales Order", "read", throw=True)
+	return sales.sales_summary(
+		date_from,
+		date_to=date_to,
+		granularity=granularity,
+		fulfillment_network=fulfillment_network,
+		marketplace=marketplace,
+	)
+
+
+@frappe.whitelist()
+def get_top_selling_products(
+	date_from,
+	date_to=None,
+	by="revenue",
+	group_by="sku",
+	limit=None,
+	fulfillment_network=None,
+	marketplace=None,
+):
+	"""The best-selling SKUs or ASINs over a period, ranked."""
+	frappe.has_permission("Sales Order", "read", throw=True)
+	return sales.top_selling_products(
+		date_from,
+		date_to=date_to,
+		by=by,
+		group_by=group_by,
+		limit=limit,
+		fulfillment_network=fulfillment_network,
+		marketplace=marketplace,
+	)
+
+
+@frappe.whitelist()
+def get_product_sales(
+	sku=None,
+	asin=None,
+	date_from=None,
+	date_to=None,
+	granularity="month",
+	marketplace=None,
+):
+	"""How one SKU or ASIN sold over a period, bucketed."""
+	frappe.has_permission("Sales Order", "read", throw=True)
+	return sales.product_sales(
+		sku=sku,
+		asin=asin,
+		date_from=date_from,
+		date_to=date_to,
+		granularity=granularity,
+		marketplace=marketplace,
+	)
+
+
+@frappe.whitelist()
+def compare_sales_periods(
+	date_from,
+	date_to,
+	compare_to="previous_period",
+	baseline_from=None,
+	baseline_to=None,
+	fulfillment_network=None,
+	marketplace=None,
+):
+	"""One period's totals against another's, with the deltas already computed."""
+	frappe.has_permission("Sales Order", "read", throw=True)
+	return sales.compare_sales_periods(
+		date_from,
+		date_to,
+		compare_to=compare_to,
+		baseline_from=baseline_from,
+		baseline_to=baseline_to,
+		fulfillment_network=fulfillment_network,
+		marketplace=marketplace,
+	)
+
+
+@frappe.whitelist()
+def list_amazon_orders(
+	date_from,
+	date_to=None,
+	status=None,
+	fulfillment_network=None,
+	sku=None,
+	marketplace=None,
+	page_no=1,
+	page_size=None,
+):
+	"""A page of the Amazon orders behind the sales figures."""
+	frappe.has_permission("Sales Order", "read", throw=True)
+	return sales.list_amazon_orders(
+		date_from,
+		date_to=date_to,
+		status=status,
+		fulfillment_network=fulfillment_network,
+		sku=sku,
+		marketplace=marketplace,
+		page_no=page_no,
+		page_size=page_size,
+	)
+
+
+@frappe.whitelist()
+def get_amazon_order_metrics(
+	date_from,
+	date_to=None,
+	granularity="day",
+	fulfillment_network=None,
+	asin=None,
+	sku=None,
+	marketplace=None,
+):
+	"""Amazon's own sales figures for this account, live from the Sales API.
+
+	The manager gate, not the `Sales Order` one: this reads nothing local and
+	spends a live Amazon call, which is the line every other live endpoint here
+	is drawn on. It needs the Selling Partner Insights role on the SP-API app —
+	a 403 comes back saying so.
+	"""
+	_require_manager()
+	return spapi_sales.order_metrics(
+		date_from,
+		date_to=date_to,
+		granularity=granularity,
+		fulfillment_network=fulfillment_network,
+		asin=asin,
+		sku=sku,
+		marketplace=marketplace,
+	)

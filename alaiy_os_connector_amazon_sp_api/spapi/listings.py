@@ -1285,11 +1285,16 @@ def list_listings(
 	# Counted through get_all rather than db.count so the `search` or_filters are
 	# included; db.count takes filters only, and a total that ignored the search
 	# would be a bigger lie than no total at all.
+	#
+	# The count is written as a dict rather than as "count(name) as total":
+	# from Frappe v16 the query builder refuses a SQL function spelled as a string
+	# in `fields` and throws, so the string form did not return a wrong total, it
+	# took the whole endpoint down.
 	total = frappe.get_all(
 		"Amazon Product Listing",
 		filters=filters,
 		or_filters=or_filters,
-		fields=["count(name) as total"],
+		fields=[{"COUNT": "name", "as": "total"}],
 	)[0]["total"]
 
 	return {

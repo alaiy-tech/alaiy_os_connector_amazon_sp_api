@@ -173,6 +173,20 @@ ORDER_STATUS_SUBMIT = (
 )
 ORDER_STATUS_CANCEL = ("Canceled", "Unfulfillable")
 
+# --- Sales API (v1) ---------------------------------------------------------
+SALES_ORDER_METRICS_PATH = "/sales/v1/orderMetrics"
+
+# Amazon offers Hour, Day, Week, Month, Year and Total. Hour is left out because
+# it caps the interval at 30 days and answers a question nobody asks a sales
+# report; Year is left out because a Total over an explicit period says the same
+# thing without a calendar boundary to explain.
+SALES_GRANULARITIES = ("Day", "Week", "Month", "Total")
+
+# Amazon's own ceiling for every granularity above (Hour, unused here, is 30
+# days). Checked before the call so an over-wide period comes back as a sentence
+# rather than as an SP-API 400.
+SALES_MAX_INTERVAL_DAYS = 730
+
 # --- Report types (Reports API 2021-06-30) ----------------------------------
 REPORT_SELLER_PERFORMANCE = "GET_V2_SELLER_PERFORMANCE_REPORT"
 REPORT_SELLER_FEEDBACK = "GET_SELLER_FEEDBACK_DATA"
