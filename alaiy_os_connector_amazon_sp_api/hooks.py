@@ -113,13 +113,6 @@ scheduler_events = {
 		"*/10 * * * *": [
 			"alaiy_os_connector_amazon_sp_api.tasks.sync_orders",
 		],
-		# Every 15 minutes: re-read the SKUs whose last write Amazon accepted but
-		# has not confirmed applying. Nothing else can learn that a creation was
-		# rejected after the fact, and until it does the row reads `pending` -
-		# which is also what a healthy in-flight write looks like.
-		"*/15 * * * *": [
-			"alaiy_os_connector_amazon_sp_api.tasks.reconcile_submissions",
-		],
 	},
 }
 

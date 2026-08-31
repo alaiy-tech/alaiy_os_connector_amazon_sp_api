@@ -4,7 +4,7 @@
 
 import frappe
 
-from alaiy_os_connector_amazon_sp_api.spapi import health, orders, reconcile, submissions
+from alaiy_os_connector_amazon_sp_api.spapi import health, orders, reconcile
 
 
 def _connection_ready():
@@ -56,25 +56,6 @@ def sync_orders():
 	except Exception:
 		frappe.log_error(title="Amazon scheduled order sync failed", message=frappe.get_traceback())
 		_alert_managers("Amazon order sync failed")
-
-
-def reconcile_submissions():
-	"""Every 15m: settle writes Amazon accepted but had not yet applied.
-
-	Cheap when idle — the query returns nothing unless something is actually in
-	flight — and the cadence is set by how long a creation may sit unexplained,
-	not by API cost. See spapi.submissions for why a re-read is the only way to
-	learn a submission's fate.
-	"""
-	if not _connection_ready():
-		return
-	try:
-		submissions.reconcile_pending_submissions()
-	except Exception:
-		frappe.log_error(
-			title="Amazon submission reconciliation failed", message=frappe.get_traceback()
-		)
-		_alert_managers("Amazon submission reconciliation failed")
 
 
 def refresh_connection_status():

@@ -19,12 +19,6 @@ live listing (compare_listing -> remote_snapshot), never against the register
 row: the row is only as fresh as the last sync, so it cannot say what Amazon is
 missing.
 
-Everything above is an *offer* against a catalog entry Amazon already holds. A
-product nobody has listed has no such entry, and `create_asin` is the other
-thing: a full submission, with no `requirements` key and no suggested ASIN, that
-asks Amazon to mint one. What it must carry is read from the product type's own
-schema rather than assumed — see the section header above `create_asin`.
-
 Attribute shapes (purchasable_offer, fulfillment_availability, ...) follow the
 common product-type schema; they may need per-marketplace/product-type tuning
 against a real account.
@@ -37,7 +31,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime, strip_html
 
-from alaiy_os_connector_amazon_sp_api.spapi import catalog, product_types
+from alaiy_os_connector_amazon_sp_api.spapi import catalog
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	CATALOG_ITEMS_PATH,
@@ -363,7 +357,6 @@ def create_listing(
 		fulfillment_channel=fulfillment_channel,
 		product=product,
 		issues=issues,
-		response=resp,
 	)
 
 
@@ -379,7 +372,6 @@ def _apply_submitted_offer(
 	fulfillment_channel,
 	product=None,
 	issues=None,
-	response=None,
 ):
 	"""Record an accepted-but-not-yet-readable create on the register row.
 
@@ -400,8 +392,6 @@ def _apply_submitted_offer(
 		"fulfillment_channel": fulfillment_channel or "DEFAULT",
 		"listing_status": "pending",
 		"last_synced_at": now_datetime(),
-		# See _apply_submitted_changes: this is what the reconciler follows up.
-		"submission_id": (response or {}).get("submissionId"),
 	}
 	if price is not None:
 		values["price"] = flt(price)
@@ -492,10 +482,10 @@ def update_listing(sku, changes, marketplace=None):
 	# pre-update state and clobber the operator's edits. Persist the submitted
 	# values locally and mark the row pending; the real state is reconciled by
 	# "Sync from Amazon" or the scheduled job once Amazon has processed it.
-	return _apply_submitted_changes(sku, mp, changes, issues, resp)
+	return _apply_submitted_changes(sku, mp, changes, issues)
 
 
-def _apply_submitted_changes(sku, mp, changes, issues, response=None):
+def _apply_submitted_changes(sku, mp, changes, issues):
 	"""Write the operator's accepted changes to the register row (status pending)."""
 	if not frappe.db.exists("Amazon Product Listing", sku):
 		# No local row yet (e.g. updating a SKU synced elsewhere) — fall back to a
@@ -519,10 +509,6 @@ def _apply_submitted_changes(sku, mp, changes, issues, response=None):
 		)
 	row.listing_status = "pending"
 	row.last_synced_at = now_datetime()
-	# What lets the submission reconciler finish this off. Without it the row sits
-	# at `pending` until somebody happens to sync it by hand, and an update Amazon
-	# rejected after accepting looks exactly like one still in flight.
-	row.submission_id = (response or {}).get("submissionId")
 	row.set("suppression_reasons", [])
 	for issue in issues:
 		row.append("suppression_reasons", issue)
@@ -1613,307 +1599,3 @@ def draft_listing(
 
 	row.insert()
 	return {"sku": row.name, "listing_status": row.listing_status, "marketplace": mp.name}
-
-
-# --- creating the catalog entry (a new ASIN) ---------------------------------
-# Everything above this line publishes an *offer* against a catalog entry Amazon
-# already holds: create_listing sends requirements=LISTING_OFFER_ONLY and names
-# the ASIN in merchant_suggested_asin. That is the right shape for a product
-# somebody has already listed, and the wrong shape — the impossible shape — for
-# one nobody has. A product sourced from a wholesaler and sold here first matches
-# no ASIN, so catalog search returns nothing for it, so the row has no ASIN to
-# attach to and never will until one is minted.
-#
-# Minting it is this section. The submission differs from an offer in three ways
-# and every one of them matters:
-#
-#   * no `requirements` key at all. Its absence is what asks Amazon for a catalog
-#     entry; LISTING_OFFER_ONLY is a promise not to create one.
-#   * no merchant_suggested_asin. There is no ASIN to suggest.
-#   * the product's own content — title, brand, description, bullets, images — is
-#     carried, because here it *is* the product. On an offer it belongs to
-#     whoever owns the ASIN, which is why create_listing deliberately drops it.
-#
-# What Amazon requires beyond that is per product type and cannot be guessed, so
-# it is read (product_types.get_definition) rather than assumed, and a row that
-# cannot satisfy it is blocked here with the attribute named — not submitted and
-# rejected later.
-
-
-def _gtin_exempt_brands():
-	"""Brands the operator has recorded a GTIN exemption for, casefolded.
-
-	Amazon grants the exemption in Seller Central, per brand, and exposes no API
-	to ask whether it holds. So this is a declaration rather than a fact: naming a
-	brand here says the grant was obtained. A brand named without it gets the
-	submission rejected, which is the honest failure — better than refusing to
-	submit at all and making the exemption unusable.
-	"""
-	raw = frappe.db.get_single_value("Amazon Connection", "gtin_exempt_brands") or ""
-	return {line.strip().casefold() for line in raw.splitlines() if line.strip()}
-
-
-def _identifier_attributes(mp, row):
-	"""How Amazon is to identify this product: a barcode, or an exemption.
-
-	One of the two is mandatory for a catalog entry and they are mutually
-	exclusive. A real barcode wins when the row has one — an exemption is a
-	dispensation for products that genuinely have no GTIN, not a shortcut past
-	entering the one you have. Returns None when the row can offer neither, which
-	is a blocker and not something to paper over.
-	"""
-	product_id = _clean_text(row.get("product_id"))
-	if product_id:
-		return {
-			"externally_assigned_product_identifier": [
-				{
-					"marketplace_id": mp.marketplace_id,
-					"type": (row.get("product_id_type") or "EAN").lower(),
-					"value": product_id,
-				}
-			]
-		}
-	brand = _clean_text(row.get("brand"))
-	if brand and brand.casefold() in _gtin_exempt_brands():
-		return {
-			"supplier_declared_has_product_identifier_exemption": [
-				{"marketplace_id": mp.marketplace_id, "value": True}
-			]
-		}
-	return None
-
-
-def _extra_attributes(row):
-	"""The row's verbatim attribute overrides, as a dict.
-
-	The escape hatch that keeps this feature finishable: a product type can
-	require attributes no listing field holds, and without somewhere to put them
-	such a row would be blocked forever with no way to unblock it.
-	"""
-	raw = _clean_text(row.get("extra_attributes"))
-	if not raw:
-		return {}
-	try:
-		blob = json.loads(raw)
-	except ValueError as e:
-		frappe.throw(
-			_("Extra Attributes on {0} is not valid JSON: {1}").format(row.name, e),
-			title=_("Cannot read extra attributes"),
-		)
-	if not isinstance(blob, dict):
-		frappe.throw(
-			_("Extra Attributes must be a JSON object keyed by Amazon attribute name."),
-			title=_("Cannot read extra attributes"),
-		)
-	return blob
-
-
-def _catalog_attributes(mp, row):
-	"""Every attribute a new-ASIN submission carries, product first then offer."""
-	attrs = {
-		"condition_type": [
-			{"marketplace_id": mp.marketplace_id, "value": row.get("condition") or "new_new"}
-		]
-	}
-	if row.get("title"):
-		attrs["item_name"] = _title_attribute(mp, row.get("title"))
-	if row.get("brand"):
-		attrs["brand"] = [{"marketplace_id": mp.marketplace_id, "value": row.get("brand")}]
-	if row.get("description"):
-		attrs["product_description"] = _description_attribute(mp, row.get("description"))
-	bullets = _row_bullets(row)
-	if bullets:
-		attrs["bullet_point"] = _bullet_attribute(mp, bullets)
-	keywords = _row_keywords(row)
-	if keywords:
-		attrs["generic_keyword"] = _keyword_attribute(mp, keywords)
-	images = _row_images(row)
-	if images:
-		attrs.update(_image_attributes(mp, images))
-	if row.get("price") is not None:
-		attrs["purchasable_offer"] = _price_attribute(mp, row.get("price"))
-	if row.get("quantity") is not None:
-		attrs["fulfillment_availability"] = _availability_attribute(
-			row.get("quantity"), row.get("fulfillment_channel")
-		)
-	identifier = _identifier_attributes(mp, row)
-	if identifier:
-		attrs.update(identifier)
-	# Last, so an operator can correct anything above by naming it explicitly.
-	attrs.update(_extra_attributes(row))
-	return attrs
-
-
-# The two attributes that answer "how does Amazon identify this product?". One of
-# them has to be in a create's payload; which one is _identifier_attributes' call.
-_IDENTIFIER_ATTRIBUTES = (
-	"externally_assigned_product_identifier",
-	"supplier_declared_has_product_identifier_exemption",
-)
-
-
-def _identifier_blocker(row):
-	"""Why this row has no product identifier, phrased as what to go and do."""
-	brand = _clean_text(row.get("brand"))
-	if not brand:
-		return _(
-			"No product identifier and no brand. Amazon needs either a barcode in Product ID, "
-			"or a GTIN exemption — and an exemption is granted per brand, so the row needs a "
-			"brand before it can use one."
-		)
-	return _(
-		"No product identifier. Enter the barcode in Product ID, or — if this product has none "
-		"— apply in Seller Central for a GTIN exemption for the brand '{0}', then add that brand "
-		"to GTIN-Exempt Brands on the Amazon Connection."
-	).format(brand)
-
-
-def asin_create_blockers(row, attributes, schema):
-	"""Why this row cannot become a catalog entry yet, in operator terms.
-
-	Same stance as `_create_blockers` for offers: reported rather than attempted.
-	The difference is that most of this list is not ours to decide — it is read
-	off the product type's own schema, so the answer stays right as Amazon changes
-	what a product type requires.
-	"""
-	blockers = []
-	if row.get("asin"):
-		blockers.append(
-			_(
-				"This SKU already has an ASIN ({0}). It does not need a new catalog entry — "
-				"publish it to put your offer on that ASIN."
-			).format(row.get("asin"))
-		)
-	if not row.get("product_type"):
-		# Nothing below can be judged without one: the required-attribute list is
-		# a property of the product type, so there is no schema to check against.
-		blockers.append(
-			_(
-				"No product type. Amazon cannot be asked to create a product without being told "
-				"what kind of product it is — use Suggest Product Type on the title."
-			)
-		)
-		return blockers
-	if not _clean_text(row.get("title")):
-		blockers.append(_("No title. It becomes the product's name in Amazon's catalog."))
-	if not any(name in attributes for name in _IDENTIFIER_ATTRIBUTES):
-		blockers.append(_identifier_blocker(row))
-
-	if schema is None:
-		blockers.append(
-			_(
-				"Amazon has no definition for product type '{0}' in this marketplace, so nothing "
-				"can be created under it here. Pick a different product type."
-			).format(row.get("product_type"))
-		)
-		return blockers
-
-	missing = [name for name in product_types.required_attributes(schema) if name not in attributes]
-	for name in missing:
-		blockers.append(
-			_("Amazon requires '{0}' ({1}) for product type {2}. Add it under Extra Attributes.").format(
-				product_types.attribute_title(schema, name), name, row.get("product_type")
-			)
-		)
-	return blockers
-
-
-def preview_asin_creation(sku, marketplace=None):
-	"""What creating this product on Amazon would submit, without submitting it.
-
-	One definitions call (cached) and no write. `blockers` is the whole answer for
-	a row that cannot go; `attributes` is what would be sent for one that can, so
-	the operator agrees to a payload rather than to a button.
-	"""
-	row = _register_row(sku)
-	mp = _marketplace(marketplace or row.get("marketplace"))
-	product_type = row.get("product_type")
-	schema = product_types.get_definition(product_type, marketplace=mp.name) if product_type else None
-	attributes = _catalog_attributes(mp, row) if product_type else {}
-	blockers = asin_create_blockers(row, attributes, schema)
-	return {
-		"sku": sku,
-		"marketplace": mp.name,
-		"product_type": product_type,
-		"listing_status": row.get("listing_status"),
-		"attributes": attributes,
-		"required": product_types.required_attributes(schema),
-		"blockers": blockers,
-		"warnings": _create_warnings(row),
-		"ready": not blockers,
-	}
-
-
-def create_asin(sku, marketplace=None):
-	"""Ask Amazon to create a catalog entry for this SKU, and record the submission.
-
-	Deliberately not reachable from `publish_listing`. Publishing decides between
-	an offer and an update by reading the SKU, and both of those are reversible in
-	the ordinary sense — a bad price is a correction away. A catalog entry is not:
-	it becomes a public ASIN other sellers can list against, and a bulk publish of
-	drafts that quietly minted a few hundred of them would be nobody's intent.
-	Creating is therefore its own verb, asked for one row at a time.
-
-	Returns {sku, action: "submitted", submission_id, listing_status, issues}. The
-	ASIN is not in the answer because Amazon does not have one yet — see
-	`reconcile_pending_submissions` for where it arrives.
-	"""
-	conn = _connection()
-	row = _register_row(sku)
-	mp = _marketplace(marketplace or row.get("marketplace"))
-	product_type = row.get("product_type")
-	schema = product_types.get_definition(product_type, marketplace=mp.name) if product_type else None
-	attributes = _catalog_attributes(mp, row) if product_type else {}
-
-	blockers = asin_create_blockers(row, attributes, schema)
-	if blockers:
-		frappe.throw(
-			_("Cannot create {0} on Amazon:").format(sku) + "<br>• " + "<br>• ".join(blockers),
-			title=_("Not ready to create"),
-		)
-
-	# No `requirements` key. Its absence is the request for a catalog entry; see
-	# this section's header.
-	body = {"productType": product_type, "attributes": attributes}
-	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
-
-	client = SpApiClient(conn)
-	try:
-		resp = client.put(
-			_seller_path(conn.selling_partner_id, sku), params=params, body=body, context="listing"
-		)
-	except SpApiError as e:
-		_handle_forbidden(e)
-
-	issues = _issues_from(resp)
-	_raise_on_rejected_submission(resp, issues, _("product"))
-	return _record_submitted_creation(sku, resp, issues)
-
-
-def _record_submitted_creation(sku, response, issues):
-	"""Stamp the row with an accepted creation, and do not read it back.
-
-	`create_listing` re-fetches after an offer submission and falls back when the
-	SKU is not readable yet. Creating a catalog entry does not even try: Amazon
-	takes minutes to hours to mint an ASIN, so the read would 404 essentially
-	always, and a fallback dressed up as a read-back is just a slower way of
-	writing what we already know. The submission id is what makes the wait
-	survivable — `reconcile_pending_submissions` finishes the job.
-	"""
-	row = frappe.get_doc("Amazon Product Listing", sku)
-	row.submission_id = (response or {}).get("submissionId")
-	row.listing_status = "pending"
-	row.last_published_at = now_datetime()
-	row.last_publish_error = None
-	row.set("suppression_reasons", [])
-	for issue in issues:
-		row.append("suppression_reasons", issue)
-	row.flags.ignore_permissions = True
-	row.save(ignore_permissions=True)
-	return {
-		"sku": sku,
-		"action": "submitted",
-		"submission_id": row.submission_id,
-		"listing_status": row.listing_status,
-		"issues": issues,
-	}
