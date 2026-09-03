@@ -17,6 +17,19 @@ app_license = "agpl-3.0"
 # the DocType is absent.
 required_apps = ["alaiy_os"]
 
+# The listing agent's Amazon channel
+# ----------------------------------
+# There is ONE listing agent on a site and it lives in alaiy_os_agent_listing,
+# which knows nothing about any marketplace. This is where Amazon tells it what it
+# wants: the extra fields, the rules, the validator, and how to read and write a
+# listing. See listing/channel.py.
+#
+# Deliberately NOT in required_apps. A site can run this connector with no listing
+# agent installed — the hook is simply never read — and one can be added later
+# without touching anything here. The dependency points one way: the agent looks
+# for channels, channels do not look for the agent.
+listing_channels = ["alaiy_os_connector_amazon_sp_api.listing.channel.channel"]
+
 # Installation
 # ------------
 after_install = "alaiy_os_connector_amazon_sp_api.setup.install.after_install"
