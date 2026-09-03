@@ -34,6 +34,11 @@ REGION_CONSENT_HOSTS = {
 
 # --- Catalog & Listings Items APIs ------------------------------------------
 CATALOG_ITEMS_PATH = "/catalog/2022-04-01/items"
+# Role-free: usable to verify a token before any SP-API role is granted,
+# and the only way to learn which marketplaces a seller participates in —
+# the OAuth callback carries none.
+MARKETPLACE_PARTICIPATIONS_PATH = "/sellers/v1/marketplaceParticipations"
+
 LISTINGS_ITEMS_BASE = "/listings/2021-08-01/items"
 
 # searchDefinitionsProductTypes (Product Type Definitions API 2020-09-01). A
