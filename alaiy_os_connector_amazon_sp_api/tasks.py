@@ -4,40 +4,51 @@
 
 import frappe
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api.spapi import health, orders, reconcile, submissions
 
 
 def _connection_ready():
-	"""True only when a refresh token is stored."""
+	"""True when at least one seller on this site has a refresh token stored."""
 	if not frappe.db.exists("DocType", "Amazon Connection"):
 		return False
-	conn = frappe.get_cached_doc("Amazon Connection")
-	return conn.is_connected()
+	return bool(connections.connected_names())
+
+
+
+def _for_each_connection(label, run):
+	"""
+	Run a scheduled job once per connected seller.
+
+	A single-seller bench iterates a list of one, so it behaves exactly as it
+	did when Amazon Connection was a Single. On a bench with several, one
+	seller's failure is logged against that seller and the rest still run —
+	the alternative is one broken connection silently stopping everyone's sync.
+	"""
+	for name in connections.connected_names():
+		try:
+			run(name)
+		except Exception:
+			frappe.log_error(
+				title=f"Amazon scheduled {label} failed ({name})",
+				message=frappe.get_traceback(),
+			)
+			_alert_managers(f"Amazon {label} failed for {name}")
 
 
 def sync_health():
 	"""Daily: refresh account-health metrics + feedback for the primary marketplace."""
-	if not _connection_ready():
-		return
-	try:
-		health.run_health_sync()
-	except Exception:
-		frappe.log_error(title="Amazon scheduled health sync failed", message=frappe.get_traceback())
-		_alert_managers("Amazon account-health sync failed")
+	_for_each_connection("health sync", lambda name: health.run_health_sync(connection=name))
 
 
 def reconcile_listings():
 	"""Every 6h: reconcile the full catalog's status/price/quantity from the
 	Merchant Listings report (no 1000-SKU cap; see spapi.reconcile)."""
-	if not _connection_ready():
-		return
-	try:
-		reconcile.reconcile_all_listings()
-	except Exception:
-		frappe.log_error(
-			title="Amazon scheduled listing reconciliation failed", message=frappe.get_traceback()
-		)
-		_alert_managers("Amazon listing reconciliation failed")
+	_for_each_connection(
+		"listing reconciliation",
+		lambda name: reconcile.reconcile_all_listings(connection=name),
+	)
 
 
 def sync_orders():
@@ -47,15 +58,21 @@ def sync_orders():
 	otherwise email its managers every ten minutes about a feature it isn't
 	using.
 	"""
-	if not _connection_ready():
-		return
-	if not frappe.db.get_single_value("Amazon Connection", "orders_customer"):
-		return
-	try:
-		orders.sync_orders()
-	except Exception:
-		frappe.log_error(title="Amazon scheduled order sync failed", message=frappe.get_traceback())
-		_alert_managers("Amazon order sync failed")
+	for name in connections.connected_names():
+		# A seller with no default customer has not finished configuring order
+		# import; skipping is why an unconfigured site does not email its
+		# managers every ten minutes about a feature it is not using.
+		if not frappe.db.get_value("Amazon Connection", name, "orders_customer"):
+			continue
+		try:
+			orders.sync_orders(connection=name)
+		except Exception:
+			# Per connection, so one seller's failure does not stop the rest.
+			frappe.log_error(
+				title=f"Amazon scheduled order sync failed ({name})",
+				message=frappe.get_traceback(),
+			)
+			_alert_managers(f"Amazon order sync failed for {name}")
 
 
 def reconcile_submissions():
@@ -78,15 +95,15 @@ def reconcile_submissions():
 
 
 def refresh_connection_status():
-	"""Hourly: ping preflight and update last_status."""
-	if not _connection_ready():
-		return
-	try:
-		frappe.get_doc("Amazon Connection").ping()
-	except Exception:
-		frappe.log_error(
-			title="Amazon connection status refresh failed", message=frappe.get_traceback()
-		)
+	"""Hourly: ping preflight and update last_status, for every seller."""
+	for name in connections.connected_names():
+		try:
+			connections.for_write(name).ping()
+		except Exception:
+			frappe.log_error(
+				title=f"Amazon connection status refresh failed ({name})",
+				message=frappe.get_traceback(),
+			)
 
 
 def _alert_managers(subject):

@@ -34,6 +34,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api.spapi import catalog, reports
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
@@ -52,13 +54,13 @@ _REPORT_STATUS = {"active": "active", "inactive": "inactive"}
 _COMMIT_EVERY = 200  # persist periodically so a long run makes forward progress
 
 
-def reconcile_all_listings(marketplace=None, notify_user=None):
+def reconcile_all_listings(marketplace=None, notify_user=None, connection=None):
 	"""Reconcile every listing for a marketplace from the Merchant Listings report.
 
 	Intended to run as a background/scheduled job. Publishes an
 	`amazon_reconcile_complete` realtime event to `notify_user` when done.
 	"""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 	mp = _marketplace(marketplace)

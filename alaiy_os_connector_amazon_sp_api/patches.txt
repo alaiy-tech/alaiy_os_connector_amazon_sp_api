@@ -7,3 +7,4 @@ alaiy_os_connector_amazon_sp_api.patches.rename_amazon_listing_to_amazon_product
 # Patches added in this section will be executed after doctypes are migrated
 alaiy_os_connector_amazon_sp_api.patches.backfill_order_provenance
 alaiy_os_connector_amazon_sp_api.patches.backfill_listing_product_type
+alaiy_os_connector_amazon_sp_api.patches.single_to_multiple_connections

@@ -80,6 +80,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, get_last_day, getdate, nowdate
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api.spapi.constants import ORDER_STATUS_CANCEL
 
 # Bucket start per granularity, as a MariaDB expression over `so.transaction_date`.
@@ -166,7 +168,7 @@ def _assert_bucket_count(date_from, date_to, granularity):
 
 
 # --- company & currency ------------------------------------------------------
-def _company():
+def _company(connection=None):
 	"""The company Amazon orders book to.
 
 	`orders._company` resolves the same two sources and throws when neither is
@@ -175,7 +177,7 @@ def _company():
 	orders themselves still name the company they were booked to, and answering
 	from them beats refusing.
 	"""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	company = conn.orders_company or frappe.defaults.get_global_default("company")
 	if not company:
 		company = frappe.db.get_value(

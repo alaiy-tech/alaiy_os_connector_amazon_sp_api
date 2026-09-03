@@ -14,6 +14,7 @@ import frappe
 from frappe import _
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
+from alaiy_os_connector_amazon_sp_api import connections
 from alaiy_os_connector_amazon_sp_api.spapi import auth
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 
@@ -37,29 +38,50 @@ def _state_cache_key():
 	return f"amazon_oauth_state::{frappe.session.sid}"
 
 
-def issue_state():
+def issue_state(connection=None):
+	"""
+	Mint a single-use state, remembering which connection it authorises.
+
+	The connection is stored with the state rather than re-resolved in the
+	callback: by then the operator may have several, and Amazon tells us
+	nothing about which one the round trip was for.
+	"""
 	state = frappe.generate_hash(length=32)
-	frappe.cache().set_value(_state_cache_key(), state, expires_in_sec=STATE_TTL)
+	frappe.cache().set_value(
+		_state_cache_key(),
+		{"state": state, "connection": connections.resolve_name(connection)},
+		expires_in_sec=STATE_TTL,
+	)
 	return state
 
 
 def consume_state(received):
-	"""Whether `received` is the state we issued for this session. Single-use.
+	"""
+	The connection this state authorises, or None if it does not match.
 
 	Answers rather than throws: a mismatch is the operator's stale tab or a
 	back-button replay far more often than it is an attack, and both callbacks
 	below report it as a failed connection with a "start again" message.
+
+	Single-use — the cache entry is dropped whether or not it matched.
 	"""
-	expected = frappe.cache().get_value(_state_cache_key())
-	frappe.cache().delete_value(_state_cache_key())  # single-use
-	return bool(expected) and bool(received) and received == expected
+	stored = frappe.cache().get_value(_state_cache_key())
+	frappe.cache().delete_value(_state_cache_key())
+	if not stored or not received:
+		return None
+	# Tolerates an entry written before states carried a connection.
+	if isinstance(stored, str):
+		return connections.DEFAULT_ID if stored == received else None
+	if stored.get("state") != received:
+		return None
+	return stored.get("connection")
 
 
-def consent_url(state):
+def consent_url(state, connection=None):
 	"""Build the Amazon Seller Central consent URL."""
 	config.assert_ready()
 
-	connection = frappe.get_cached_doc("Amazon Connection")
+	connection = connections.resolve(connection)
 	base = config.consent_base_url(connection.region)
 	if not base:
 		frappe.throw(_("No consent base URL for region {0}.").format(connection.region))
@@ -76,9 +98,9 @@ def consent_url(state):
 	return f"{base}/apps/authorize/consent?{urlencode(params)}"
 
 
-def store_refresh_token(refresh_token, selling_partner_id):
-	"""Persist the token on the Amazon Connection Single (encrypted)."""
-	connection = frappe.get_doc("Amazon Connection")
+def store_refresh_token(refresh_token, selling_partner_id, connection=None):
+	"""Persist the token on the named Amazon Connection (encrypted)."""
+	connection = connections.for_write(connection)
 	connection.refresh_token = refresh_token
 	if selling_partner_id:
 		connection.selling_partner_id = selling_partner_id
@@ -114,7 +136,10 @@ def complete_authorization(code, state, selling_partner_id=None, error=None, err
 	if error:
 		return _failed(error_description or error)
 
-	if not consume_state(state):
+	# The state names which connection this round trip authorises; Amazon sends
+	# nothing that would let us work it out afterwards.
+	target = consume_state(state)
+	if not target:
 		return _failed(_("OAuth state mismatch. Please start the connection again."))
 
 	if not code:
@@ -129,7 +154,7 @@ def complete_authorization(code, state, selling_partner_id=None, error=None, err
 	if not refresh_token:
 		return _failed(_("Amazon did not return a refresh token."))
 
-	connection = store_refresh_token(refresh_token, selling_partner_id)
+	connection = store_refresh_token(refresh_token, selling_partner_id, connection=target)
 
 	# Verify with a role-free preflight. Keep the token even if it fails — the
 	# authorization succeeded, and a 403 here is usually a fixable region / beta /

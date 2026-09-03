@@ -29,6 +29,8 @@ import json
 import frappe
 from frappe import _
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api import app_config as config
 from alaiy_os_connector_amazon_sp_api import csv_export, links, oauth, sales
 from alaiy_os_connector_amazon_sp_api.spapi import (
@@ -53,9 +55,9 @@ def _require_manager():
 
 # --- connection --------------------------------------------------------------
 @frappe.whitelist()
-def get_connection_status():
+def get_connection_status(connection=None):
 	"""Return the current connection status (never exposes the token)."""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	marketplace_id = None
 	if conn.primary_marketplace:
 		marketplace_id = frappe.db.get_value(
@@ -99,7 +101,7 @@ def get_connect_url():
 
 
 @frappe.whitelist()
-def get_consent_url():
+def get_consent_url(connection=None):
 	"""Issue the OAuth state and return Amazon's consent URL to send the browser to.
 
 	What `/amazon-oauth/start` does, as data instead of a redirect — for the OS
@@ -112,8 +114,11 @@ def get_consent_url():
 	is not already this session.
 	"""
 	_require_manager()
-	state = oauth.issue_state()  # consent_url asserts the app credentials are set
-	return {"url": oauth.consent_url(state), "redirect_uri": oauth.redirect_uri()}
+	state = oauth.issue_state(connection)  # consent_url asserts the app credentials are set
+	return {
+		"url": oauth.consent_url(state, connection),
+		"redirect_uri": oauth.redirect_uri(),
+	}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -138,29 +143,29 @@ def complete_oauth(
 
 
 @frappe.whitelist()
-def disconnect():
+def disconnect(connection=None):
 	"""Clear the stored refresh token and mark the connection not configured."""
 	_require_manager()
-	conn = frappe.get_doc("Amazon Connection")
+	conn = connections.for_write(connection)
 	conn.clear_token("Disconnected by user")
 	return {"status": "not_configured"}
 
 
 @frappe.whitelist()
-def ping():
+def ping(connection=None):
 	"""Verify the connection via a role-free preflight; updates last_status."""
 	_require_manager()
-	conn = frappe.get_doc("Amazon Connection")
+	conn = connections.for_write(connection)
 	return conn.ping()
 
 
 @frappe.whitelist()
-def test_connection():
+def test_connection(connection=None):
 	"""OS Connector Registry test hook. Returns {success, message}.
 
 	Called by alaiy_os_core's connector panel; must not raise.
 	"""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		return {"success": False, "message": "Amazon account is not connected. Use Connect to authorize."}
 	result = conn.ping()
@@ -171,19 +176,19 @@ def test_connection():
 
 # --- health ------------------------------------------------------------------
 @frappe.whitelist()
-def sync_health(marketplace=None):
+def sync_health(marketplace=None, connection=None):
 	"""On-demand account-health sync for a marketplace (defaults to primary)."""
 	_require_manager()
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected. Connect it first."))
 	return health.run_health_sync(marketplace)
 
 
 @frappe.whitelist()
-def get_health_summary(marketplace=None):
+def get_health_summary(marketplace=None, connection=None):
 	"""Return the overall health status, metric rows, and recent feedback."""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	marketplace = marketplace or conn.primary_marketplace
 
 	filters = {}
@@ -333,7 +338,7 @@ def publish_listing(sku, desired=None, marketplace=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def publish_listings(skus, marketplace=None):
+def publish_listings(skus, marketplace=None, connection=None):
 	"""Publish a selection of register rows, creating the ones Amazon lacks.
 
 	Runs in the background: each row costs several Amazon calls, so a selection
@@ -365,7 +370,7 @@ def publish_listings(skus, marketplace=None):
 			)
 		)
 
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 
@@ -571,7 +576,7 @@ def sync_listing(sku, marketplace=None):
 
 
 @frappe.whitelist()
-def sync_all_listings(marketplace=None):
+def sync_all_listings(marketplace=None, connection=None):
 	"""Pull all listings for the (primary) marketplace into the register.
 
 	Runs in the background — a catalog can be up to 1,000 SKUs, too slow for a
@@ -579,7 +584,7 @@ def sync_all_listings(marketplace=None):
 	realtime event when it finishes.
 	"""
 	_require_manager()
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 
@@ -594,14 +599,14 @@ def sync_all_listings(marketplace=None):
 
 
 @frappe.whitelist()
-def reconcile_listings(marketplace=None):
+def reconcile_listings(marketplace=None, connection=None):
 	"""Reconcile the full catalog from the Merchant Listings report (no 1000-SKU cap).
 
 	Runs in the background (a full-catalog report can take a while to generate).
 	The caller is notified via the `amazon_reconcile_complete` realtime event.
 	"""
 	_require_manager()
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 
@@ -616,8 +621,8 @@ def reconcile_listings(marketplace=None):
 
 
 # --- orders (Phase 4) --------------------------------------------------------
-def _assert_orders_configured():
-	conn = frappe.get_cached_doc("Amazon Connection")
+def _assert_orders_configured(connection=None):
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 	if not conn.orders_customer:
@@ -671,7 +676,7 @@ def backfill_orders(date_from, date_to=None, marketplace=None):
 
 
 @frappe.whitelist()
-def get_orders_sync_status():
+def get_orders_sync_status(connection=None):
 	"""Watermark + counts for the connector panel's sync-status slot.
 
 	Also the coverage window — the first and last order date the sync has
@@ -680,7 +685,7 @@ def get_orders_sync_status():
 	sales reads return lies by omission, answering a period the sync never
 	covered with a confident zero.
 	"""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	span = {"first_order_date": None, "last_order_date": None, "synced_orders": 0}
 	if frappe.db.exists("DocType", "Sales Order"):
 		span = sales.coverage()
