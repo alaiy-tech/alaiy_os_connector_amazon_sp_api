@@ -17,6 +17,8 @@ import xml.etree.ElementTree as ET
 import frappe
 from frappe.utils import cint, flt, now_datetime
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api.spapi import reports
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
@@ -242,7 +244,7 @@ def rollup_status(statuses):
 
 
 # --- orchestration -----------------------------------------------------------
-def run_health_sync(marketplace=None):
+def run_health_sync(marketplace=None, connection=None):
 	"""Full account-health sync for one marketplace (defaults to primary).
 
 	1. preflight  2. performance + feedback reports  3. finances  4. upsert.
@@ -250,7 +252,7 @@ def run_health_sync(marketplace=None):
 	"""
 	from alaiy_os_connector_amazon_sp_api.spapi.client import describe_forbidden
 
-	connection = frappe.get_cached_doc("Amazon Connection")
+	connection = connections.resolve(connection)
 	marketplace = marketplace or connection.primary_marketplace
 	if not marketplace:
 		frappe.throw("No marketplace specified and no primary marketplace set on Amazon Connection.")

@@ -47,6 +47,8 @@ from urllib.parse import quote, urlencode
 import frappe
 from frappe import _
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api import app_config as config
 from alaiy_os_connector_amazon_sp_api.spapi.constants import REGION_CONSENT_HOSTS
 
@@ -60,14 +62,14 @@ _BUYER_PATH = "dp"
 _SELLER_CENTRAL_PATH = "skucentral"
 
 
-def _marketplace(marketplace=None):
+def _marketplace(marketplace=None, connection=None):
 	"""The Amazon Marketplace doc to build links for, and the connection.
 
 	Returns (None, conn) rather than throwing when no marketplace is resolvable:
 	"there is no link" is an answer this module is allowed to give, and the
 	caller is the one that has to say so.
 	"""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	marketplace = marketplace or conn.primary_marketplace
 	if not marketplace or not frappe.db.exists("Amazon Marketplace", marketplace):
 		return None, conn

@@ -32,6 +32,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, get_system_timezone, now_datetime
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	ORDER_ITEMS_MIN_INTERVAL,
@@ -82,8 +84,8 @@ def _window_end():
 
 
 # --- connection / configuration ----------------------------------------------
-def _connection():
-	conn = frappe.get_cached_doc("Amazon Connection")
+def _connection(connection=None):
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 	return conn
@@ -788,7 +790,7 @@ def _resolve_window(conn, updated_after, updated_before):
 	return start, end
 
 
-def sync_orders(marketplace=None, updated_after=None, updated_before=None, notify_user=None):
+def sync_orders(marketplace=None, updated_after=None, updated_before=None, notify_user=None, connection=None):
 	"""Pull every order updated in the window and upsert it as a Sales Order.
 
 	Intended to run as a background/scheduled job.
@@ -799,7 +801,7 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 	LastUpdateDate, so the next run picks it up again instead of stepping over
 	it forever. Orders ahead of that point are still not re-read.
 	"""
-	conn = _connection()
+	conn = _connection(connection)
 	mp = _marketplace(marketplace)
 	client = SpApiClient(conn)
 	start, end = _resolve_window(conn, updated_after, updated_before)

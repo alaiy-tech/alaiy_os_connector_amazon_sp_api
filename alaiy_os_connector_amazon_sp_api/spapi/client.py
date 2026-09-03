@@ -14,6 +14,8 @@ import frappe
 import requests
 from frappe.utils import cint
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api.spapi import auth
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	BACKOFF_BASE,
@@ -53,14 +55,15 @@ def _first_error(body):
 
 class SpApiClient:
 	def __init__(self, connection=None):
-		# `connection` is the Amazon Connection Single doc; loaded lazily so the
-		# client can be constructed cheaply.
+		# An Amazon Connection document, or its id. Resolved lazily so the client
+		# stays cheap to construct, and so a caller on a single-connection bench
+		# can still say SpApiClient() and mean the only seller there is.
 		self._connection = connection
 
 	@property
 	def connection(self):
-		if self._connection is None:
-			self._connection = frappe.get_cached_doc("Amazon Connection")
+		if self._connection is None or isinstance(self._connection, str):
+			self._connection = connections.resolve(self._connection)
 		return self._connection
 
 	@property

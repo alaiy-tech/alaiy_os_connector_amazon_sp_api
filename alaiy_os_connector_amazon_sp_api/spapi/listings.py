@@ -37,6 +37,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime, strip_html
 
+from alaiy_os_connector_amazon_sp_api import connections
+
 from alaiy_os_connector_amazon_sp_api.spapi import catalog, product_types
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
@@ -48,8 +50,8 @@ from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 
 
 # --- shared helpers ----------------------------------------------------------
-def _connection():
-	conn = frappe.get_cached_doc("Amazon Connection")
+def _connection(connection=None):
+	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 	if not conn.selling_partner_id:
@@ -57,9 +59,9 @@ def _connection():
 	return conn
 
 
-def _marketplace(marketplace=None):
+def _marketplace(marketplace=None, connection=None):
 	"""Resolve to an Amazon Marketplace doc (defaults to the primary)."""
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	marketplace = marketplace or conn.primary_marketplace
 	if not marketplace:
 		frappe.throw(_("No marketplace given and no primary marketplace set on the connection."))
@@ -1382,7 +1384,7 @@ SEARCH_PAGE_SIZE = 20
 SEARCH_MAX_PAGES = 60  # safety cap (1000-SKU limit reached well before this)
 
 
-def _search_listings_items(mp, client, page_token=None):
+def _search_listings_items(mp, client, page_token=None, connection=None):
 	params = {
 		"marketplaceIds": mp.marketplace_id,
 		# `attributes` is requested so a seller who *does* own an ASIN's content
@@ -1394,7 +1396,7 @@ def _search_listings_items(mp, client, page_token=None):
 	}
 	if page_token:
 		params["pageToken"] = page_token
-	conn = frappe.get_cached_doc("Amazon Connection")
+	conn = connections.resolve(connection)
 	path = f"{LISTINGS_ITEMS_BASE}/{conn.selling_partner_id}"
 	try:
 		return client.get(path, params=params, context="reconcile")
@@ -1858,7 +1860,7 @@ def _gtin_exempt_brands():
 	submission rejected, which is the honest failure — better than refusing to
 	submit at all and making the exemption unusable.
 	"""
-	raw = frappe.db.get_single_value("Amazon Connection", "gtin_exempt_brands") or ""
+	raw = connections.resolve(connection).gtin_exempt_brands or ""
 	return {line.strip().casefold() for line in raw.splitlines() if line.strip()}
 
 

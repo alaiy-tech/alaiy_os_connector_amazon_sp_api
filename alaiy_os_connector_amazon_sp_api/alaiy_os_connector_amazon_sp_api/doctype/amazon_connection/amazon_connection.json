@@ -1,10 +1,17 @@
 {
  "actions": [],
+ "autoname": "field:connection_id",
  "creation": "2026-07-16 00:00:00.000000",
- "description": "The single Amazon seller connection for this site. Holds the OAuth refresh token and region.",
+ "description": "One Amazon seller connection. A single-seller bench has exactly one, named 'default'; a multi-tenant bench has one per seller. Holds the OAuth refresh token and region.",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "identity_section",
+  "connection_id",
+  "label",
+  "is_default",
+  "column_break_identity",
+  "owner_app",
   "connection_section",
   "last_status",
   "last_status_message",
@@ -31,6 +38,44 @@
   "last_orders_sync_at"
  ],
  "fields": [
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Identity"
+  },
+  {
+   "description": "Stable id used by callers and by the OAuth callback. A bench upgraded from the single-connection version keeps its one connection as 'default'.",
+   "fieldname": "connection_id",
+   "fieldtype": "Data",
+   "label": "Connection ID",
+   "reqd": 1,
+   "set_only_once": 1,
+   "unique": 1
+  },
+  {
+   "description": "Human-readable name, e.g. the seller or brand.",
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "label": "Label"
+  },
+  {
+   "default": "0",
+   "description": "Used when a caller names no connection. A bench with exactly one connection does not need this set.",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "label": "Default Connection"
+  },
+  {
+   "fieldname": "column_break_identity",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Set by whichever app created this connection, so a multi-tenant bench can tell its own rows from ones made by hand.",
+   "fieldname": "owner_app",
+   "fieldtype": "Data",
+   "label": "Created By App",
+   "read_only": 1
+  },
   {
    "fieldname": "connection_section",
    "fieldtype": "Section Break",
@@ -115,10 +160,10 @@
    "label": "Catalog Creation"
   },
   {
+   "description": "One brand per line. Amazon grants a GTIN exemption per brand (and sometimes per product type) in Seller Central; listing a brand here says that grant exists, so a new ASIN under it can be created without a barcode. Nothing here is verified with Amazon \u2014 a brand named without the grant is rejected at submission.",
    "fieldname": "gtin_exempt_brands",
    "fieldtype": "Small Text",
-   "label": "GTIN-Exempt Brands",
-   "description": "One brand per line. Amazon grants a GTIN exemption per brand (and sometimes per product type) in Seller Central; listing a brand here says that grant exists, so a new ASIN under it can be created without a barcode. Nothing here is verified with Amazon — a brand named without the grant is rejected at submission."
+   "label": "GTIN-Exempt Brands"
   },
   {
    "description": "Where synced Seller Central orders land. Orders are created as Sales Orders directly.",
@@ -166,7 +211,7 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "How far back the first sync reaches. Leave blank to start from 1 day ago. Only used until the watermark below is set — to re-read an older range afterwards, use Backfill Orders on the Sales Order list.",
+   "description": "How far back the first sync reaches. Leave blank to start from 1 day ago. Only used until the watermark below is set \u2014 to re-read an older range afterwards, use Backfill Orders on the Sales Order list.",
    "fieldname": "orders_sync_from",
    "fieldtype": "Datetime",
    "label": "Sync Orders From"
@@ -180,12 +225,13 @@
   }
  ],
  "index_web_pages_for_search": 0,
- "issingle": 1,
+ "issingle": 0,
  "links": [],
  "modified": "2026-07-16 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Connection",
+ "naming_rule": "By fieldname",
  "owner": "Administrator",
  "permissions": [
   {
@@ -213,7 +259,9 @@
    "role": "Amazon Viewer"
   }
  ],
+ "show_title_field_in_link": 1,
  "sort_field": "creation",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "title_field": "label"
 }
