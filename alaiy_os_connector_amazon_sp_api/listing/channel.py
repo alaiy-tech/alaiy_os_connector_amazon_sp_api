@@ -98,6 +98,7 @@ def channel():
 			"save_listing": f"{_SELF}.save_listing",
 			"validate": f"{_SELF}.validate",
 			"health": f"{_SELF}.health",
+			"register": f"{_SELF}.register",
 			# No "prepare_images" — see the module docstring.
 		},
 	}
@@ -126,6 +127,41 @@ def save_listing(product, listing):
 	from alaiy_os_connector_amazon_sp_api.listing import handlers
 
 	return handlers.save_listing(listing=listing, sku=product)
+
+
+def register(product):
+	"""Give an Item an Amazon listing row, so there is something to enrich.
+
+	The supplier connectors put products into the catalogue as ERPNext Items;
+	everything on this channel is keyed to an `Amazon Product Listing`. Without
+	this hop a product sourced from a supplier can never be enriched, because
+	there is nothing for the enrichment to be written onto — which is exactly
+	where "create an Amazon listing for this NayaGlobal product" used to stop.
+
+	**Local only. Nothing is sent to Amazon.** The row is written
+	`listing_status = "incomplete"` rather than the doctype's own default, and
+	its sync timestamps are left empty — see `from_item` for why both matter to
+	the connector's reconcile. Publishing stays a separate, deliberate act on an
+	enrichment somebody has reviewed.
+
+	Idempotent: an Item that already has a listing gets that listing back,
+	untouched. An existing listing is never edited here — Amazon's own title,
+	price and photos beat anything the Item can offer.
+	"""
+	from alaiy_os_connector_amazon_sp_api.listing import from_item
+
+	result = from_item.ensure_listing(product)
+	return {
+		"product": result["sku"],
+		"created": result["created"],
+		"channel": CHANNEL,
+		"note": (
+			f"Created a local {LISTING_DOCTYPE} for '{result['sku']}'. Nothing has been "
+			"sent to Amazon; it is a draft record to enrich and review."
+			if result["created"]
+			else f"'{result['sku']}' already had a {LISTING_DOCTYPE}; it was left as it is."
+		),
+	}
 
 
 # ── what Amazon says is wrong with this listing ───────────────────────────────
