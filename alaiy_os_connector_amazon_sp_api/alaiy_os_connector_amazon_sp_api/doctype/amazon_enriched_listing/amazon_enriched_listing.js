@@ -34,7 +34,7 @@ function render_brand_help(frm) {
 	if (!field || frm.is_new()) return;
 
 	frappe
-		.call({ method: "alaiy_os_agent_amazon_listing.api.brand_context" })
+		.call({ method: "alaiy_os_connector_amazon_sp_api.listing.review.brand_context" })
 		.then((r) => {
 			const { is_configured, valid_brands } = r.message || {};
 			let text;
@@ -103,7 +103,7 @@ function view_links(frm) {
 	if (frm.is_new() || !(frm.doc.images || []).length) return Promise.resolve({});
 	return frappe
 		.call({
-			method: "alaiy_os_agent_amazon_listing.api.image_view_links",
+			method: "alaiy_os_connector_amazon_sp_api.listing.review.image_view_links",
 			args: { sku: frm.doc.name },
 		})
 		.then((r) => r.message || {})

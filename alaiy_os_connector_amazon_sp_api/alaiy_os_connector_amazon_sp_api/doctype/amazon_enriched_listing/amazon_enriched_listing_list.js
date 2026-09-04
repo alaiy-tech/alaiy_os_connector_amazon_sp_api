@@ -28,7 +28,7 @@ function approve_selected(listview) {
 		),
 		() => {
 			frappe.call({
-				method: "alaiy_os_agent_amazon_listing.api.approve_listings",
+				method: "alaiy_os_connector_amazon_sp_api.listing.review.approve_listings",
 				args: { names: names },
 				freeze: true,
 				freeze_message: __("Approving…"),

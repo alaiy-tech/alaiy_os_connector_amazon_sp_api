@@ -19,7 +19,7 @@ required_apps = ["alaiy_os"]
 
 # The listing agent's Amazon channel
 # ----------------------------------
-# There is ONE listing agent on a site and it lives in alaiy_os_agent_listing,
+# There is ONE listing agent on a site and it lives in alaiy_os_agents,
 # which knows nothing about any marketplace. This is where Amazon tells it what it
 # wants: the extra fields, the rules, the validator, and how to read and write a
 # listing. See listing/channel.py.

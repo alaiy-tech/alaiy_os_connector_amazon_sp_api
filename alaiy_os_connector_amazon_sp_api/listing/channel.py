@@ -3,7 +3,7 @@
 """
 Amazon, as the listing agent sees it.
 
-`alaiy_os_agent_listing` owns one channel-agnostic listing agent and knows nothing
+`alaiy_os_agents` owns one channel-agnostic listing agent and knows nothing
 about any marketplace. Everything Amazon wants — its extra fields, its rules, its
 validator, and how to read and write a listing — arrives from here, through the
 `listing_channels` hook in this app's hooks.py. See that app's channels.py for the
@@ -11,8 +11,8 @@ contract.
 
 ## Why this lives in the connector
 
-It used to be its own app, `alaiy_os_agent_amazon_listing`, which registered a
-second listing agent alongside Shopify's. The two were near-duplicates of each
+It used to be its own app, since retired, which registered a second listing agent
+alongside Shopify's. The two were near-duplicates of each
 other and neither could be reached from Ask Alaiy. What was genuinely Amazon's in
 them was this: the fields, the rules, and the doctypes. All of that is knowledge
 about *the channel*, and the app that already owns the channel is this one — it

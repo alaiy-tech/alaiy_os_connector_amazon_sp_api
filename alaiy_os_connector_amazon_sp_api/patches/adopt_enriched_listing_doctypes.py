@@ -1,10 +1,10 @@
 # Copyright (c) 2026, Alaiy and contributors
 # For license information, please see license.txt
 """
-Adopt the enriched-listing DocTypes from the retired `alaiy_os_agent_amazon_listing`.
+Adopt the enriched-listing DocTypes from the retired Amazon listing agent app.
 
 That app registered a second listing agent alongside Shopify's. Both were replaced
-by the one channel-agnostic agent in `alaiy_os_agent_listing`, and what was
+by the one channel-agnostic agent in `alaiy_os_agents`, and what was
 genuinely Amazon's about it — the fields, the rules, the review record — moved into
 this connector, which already owns the channel.
 
