@@ -18,6 +18,7 @@ from alaiy_os_connector_amazon_sp_api import connections
 
 from alaiy_os_connector_amazon_sp_api.spapi import auth
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
+	MARKETPLACE_PARTICIPATIONS_PATH,
 	BACKOFF_BASE,
 	MAX_RETRIES,
 )
@@ -223,7 +224,7 @@ class SpApiClient:
 		Reports/Listings which means a missing app *role*).
 		"""
 		return self.get(
-			"/sellers/v1/marketplaceParticipations",
+			MARKETPLACE_PARTICIPATIONS_PATH,
 			context="oauth",
 		)
 
