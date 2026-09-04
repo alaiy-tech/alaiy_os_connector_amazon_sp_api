@@ -21,6 +21,24 @@ frappe.ui.form.on("Amazon Connection", {
 			alaiy_os.connector_card.mount(frm, "amazon_sp_api");
 		}
 
+		// Nothing below can act on a connection that isn't a row yet. Every
+		// button here names `frm.doc.name` so the server acts on *this* seller,
+		// and Connect is the one that used to fail worst without it: it sends the
+		// browser to /amazon-oauth/start, which resolves the connection from the
+		// database, so on an unsaved form it left the desk for a page that could
+		// only answer "no Amazon connection has been set up on this site" — as a
+		// bare 417 error page, since a website route has no dialog to put it in.
+		if (frm.is_new()) {
+			frm.dashboard.set_headline_alert(
+				`<span class="indicator blue">${__(
+					"Save this connection first, then authorize it with Amazon."
+				)}</span>`
+			);
+			return;
+		}
+
+		const connection = frm.doc.name;
+
 		// Branch on whether a refresh token is actually stored (is_connected),
 		// not just status === "connected": an authorized-but-erroring connection
 		// still has a token and should offer Test/Disconnect, not just Connect.
@@ -45,6 +63,7 @@ frappe.ui.form.on("Amazon Connection", {
 						frm.add_custom_button(__("Connect Amazon Account"), () => {
 							frappe.call({
 								method: "alaiy_os_connector_amazon_sp_api.api.get_connect_url",
+								args: { connection },
 								callback: (res) => {
 									if (res.message && res.message.url) {
 										window.location.href = res.message.url;
@@ -84,6 +103,7 @@ frappe.ui.form.on("Amazon Connection", {
 					frappe.confirm(__("Disconnect the Amazon account?"), () => {
 						frappe.call({
 							method: "alaiy_os_connector_amazon_sp_api.api.disconnect",
+							args: { connection },
 							callback: () => frm.reload_doc(),
 						});
 					});
@@ -101,6 +121,7 @@ frappe.ui.form.on("Amazon Connection", {
 					// not_configured/error distinction the wrapper flattens.
 					frappe.call({
 						method: "alaiy_os_connector_amazon_sp_api.api.ping",
+						args: { connection },
 						freeze: true,
 						freeze_message: __("Pinging Amazon…"),
 						callback: (r) => {
@@ -120,6 +141,7 @@ frappe.ui.form.on("Amazon Connection", {
 				() => {
 					frappe.call({
 						method: "alaiy_os_connector_amazon_sp_api.api.sync_health",
+						args: { connection },
 						freeze: true,
 						freeze_message: __("Syncing account health…"),
 						callback: (r) => {
