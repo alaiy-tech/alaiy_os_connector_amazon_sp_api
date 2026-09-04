@@ -200,8 +200,14 @@ Register the redirect URL in Seller Central → Develop Apps as
 1. Open the **Amazon Connection** form in Desk. It shows which required
    `site_config` keys are still missing and only enables **Connect** once all
    are set (see `alaiy_os_connector_amazon_sp_api.app_config`).
-2. Set the **Region** and **Primary Marketplace**.
-3. Click **Connect** — you are redirected to Amazon's consent screen.
+2. Set the **Connection ID**, **Region** and **Primary Marketplace**, and
+   **save**. A connection has to be a row before it can be authorized: the
+   consent state is bound to one, and `/amazon-oauth/start` resolves it from the
+   database, so an unsaved form has nothing for it to find. The form says so
+   rather than offering Connect.
+3. Click **Connect** — you are redirected to Amazon's consent screen. The button
+   sends the connection's own id (`/amazon-oauth/start?connection=<id>`), which
+   is what lets a bench holding several sellers authorize the right one.
 4. After authorizing, Amazon redirects back to `{app_url}/amazon-oauth/callback`
    and the encrypted refresh token is stored.
 5. Use **Test Connection** (or the OS Settings → Connectors panel) to verify.
@@ -215,7 +221,7 @@ All operations run server-side through whitelisted methods in
 | Method | Description |
 | --- | --- |
 | `get_connection_status` | Current status (never exposes the token). |
-| `get_connect_url` / `disconnect` | Start OAuth / clear the stored token. |
+| `get_connect_url` / `disconnect` | Start OAuth for a named connection / clear its stored token. |
 | `ping` / `test_connection` | Verify the connection via a preflight. |
 | `sync_health` / `get_health_summary` | Sync and read account-health metrics + feedback. |
 | `search_catalog` | Search the Amazon catalog for an ASIN + product type. |
