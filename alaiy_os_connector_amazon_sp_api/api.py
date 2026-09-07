@@ -25,6 +25,7 @@ manager gate that every other live call here does.
 """
 
 import json
+from urllib.parse import quote
 
 import frappe
 from frappe import _
@@ -93,11 +94,24 @@ def get_config_status():
 
 
 @frappe.whitelist()
-def get_connect_url():
-	"""Return the /amazon-oauth/start URL for the Connect button."""
+def get_connect_url(connection=None):
+	"""Return the /amazon-oauth/start URL for the Connect button.
+
+	Carries the connection, because the page it points at cannot work out which
+	seller was meant: `resolve()` refuses on a bench with several, and the Desk
+	form is the only party here that knows which row its operator has open.
+
+	Resolved now rather than passed through untouched, so an id that names
+	nothing fails on *this* call — where the button can report it in a dialog —
+	instead of on the page the browser is about to leave for, where the only
+	thing left to render is an error.
+	"""
 	_require_manager()
 	config.assert_ready()
-	return {"url": "/amazon-oauth/start"}
+	name = connections.resolve_name(connection)
+	# safe="" because the id is whatever was typed into `connection_id`, and a
+	# "/" or "&" in it would otherwise end the query parameter early.
+	return {"url": f"/amazon-oauth/start?connection={quote(name, safe='')}"}
 
 
 @frappe.whitelist()

@@ -2,6 +2,14 @@
 
 {% block page_content %}
 <div class="container" style="max-width: 640px; margin: 4rem auto; text-align: center;">
+	{% if error %}
+	<h2 style="color: var(--red-600, #dc3545);">Cannot Start Authorization</h2>
+	<p>{{ error }}</p>
+	<p style="margin-top: 2rem;">
+		<a class="btn btn-primary" href="/app/amazon-connection">Back to Amazon Connection</a>
+	</p>
+	{% else %}
 	<p>Redirecting to Amazon…</p>
+	{% endif %}
 </div>
 {% endblock %}
