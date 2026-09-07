@@ -1,0 +1,34 @@
+{
+ "type": "object",
+ "properties": {
+  "bullet_points": {
+   "type": "array",
+   "minItems": 5,
+   "maxItems": 5,
+   "items": {
+    "type": "string",
+    "minLength": 150,
+    "maxLength": 300
+   },
+   "description": "EXACTLY five bullet points, for the listing's `bullet_points` table, in this fixed order: (1) Material / Construction, (2) Design, (3) Multipurpose Applications, (4) Capacity / Functionality, (5) Everyday Use. Each is an UPPERCASE feature heading, then ' - ', then the description \u2014 e.g. 'LARGE CAPACITY - Main compartment fits A4 documents, laptop up to 14 inches, and daily essentials'. Aim for 180-250 characters each. Work high-volume Amazon search keywords in naturally, never repeating a keyword or feature across bullets. Plain text, professional and easy to read. Include variant specifications only when explicitly provided."
+  },
+  "keywords": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   },
+   "description": "Amazon BACKEND search terms, for the listing's `keywords` table \u2014 invisible to the shopper. Put here only the terms that did NOT earn a place in the title or bullets: synonyms, alternate and regional spellings, common misspellings, and related use cases. Never repeat a word that already appears in the title or bullets; Amazon already indexes those and a repeat wastes the byte budget. No competitor brand names, no third-party IP, no ASINs, no subjective claims ('best', 'cheapest'), no temporary statements ('new', 'sale'). Keep the whole set under roughly 250 bytes. Reuse a keyword from get_reference_values verbatim when it applies, so the catalog stays consistent."
+  },
+  "brand": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "Which of this deployment's own house brands this product belongs under -- see `## HOUSE BRAND` in the system prompt, where they are named and their coverage described. Decided BEFORE the title, which opens with this brand name. Never derived from the product's category or Item Group. Use the exact brand name as given in the prompt. Answer null only after checking the product against every named brand's coverage and finding it outside all of them, or when the prompt names no house brands at all -- and when you do, say in `notes` which brands you ruled out and why. A brand named for a product outside its coverage is worse than null, because the title is built on it."
+  }
+ },
+ "required": [
+  "bullet_points",
+  "keywords"
+ ]
+}
