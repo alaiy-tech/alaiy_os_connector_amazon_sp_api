@@ -468,6 +468,75 @@ SETTLED_FEE_FBA_PREFIX = "FBA"
 # fee is real money against an order but cannot be attributed to a SKU, which is
 # the grain the whole margin table is computed at.
 TRANSACTION_PRODUCT_CONTEXT = "ProductContext"
+
+# --- Orders API 2026-01-01: packages ----------------------------------------
+# Tracking and carrier data, which `spapi.orders` has always said it
+# "deliberately not touched" — because until this version there was no way to
+# read it. v0 returns an order and its items and nothing about the shipment that
+# carried them; the only route to a tracking number was the flat-file all-orders
+# report. 2026-01-01 adds `packages` to the order itself.
+#
+# The version is a constant rather than inline for a specific reason: this is
+# the newest surface anything here calls, and a marketplace or an app that has
+# not been moved onto it answers with a 400 rather than an empty array. One
+# place to change, and `packages.py` reports that refusal as itself rather than
+# as "no packages".
+ORDERS_API_VERSION_PACKAGES = "2026-01-01"
+ORDERS_PACKAGES_BASE = f"/orders/{ORDERS_API_VERSION_PACKAGES}/orders"
+
+# What to ask `getOrder` to include. Packages are opt-in: the call returns the
+# order without them and does not hint that more was available.
+ORDERS_INCLUDED_DATA_PACKAGES = "PACKAGES"
+
+# Merchant-fulfilled only. Amazon does not put an FBA order's packages here —
+# those are Amazon's own shipments and come from the fulfilled-shipments report
+# below. A sync that asked this endpoint for AFN tracking would get empty
+# arrays and conclude the seller ships nothing late.
+FULFILLMENT_CHANNEL_MERCHANT = "MFN"
+FULFILLMENT_CHANNEL_AMAZON = "AFN"
+
+# --- FBA fulfilled shipments report -----------------------------------------
+# The AFN half of the same picture: carrier, tracking number, ship date and
+# estimated arrival for every shipment Amazon made on the seller's behalf.
+#
+# Chosen over Fulfillment Outbound's `getPackageTrackingDetails`, which answers
+# for one package number at a time — a day's FBA orders would be hundreds of
+# calls against a rate limit, to assemble what one report already contains.
+# That endpoint is the right tool for chasing a single package and the wrong one
+# for a dashboard.
+REPORT_FBA_SHIPMENTS = "GET_AMAZON_FULFILLED_SHIPMENTS_DATA_GENERAL"
+
+# Amazon rejects a request for this report wider than about two months, and
+# degrades well before that. The caller walks a longer backfill in chunks.
+FBA_SHIPMENTS_MAX_WINDOW_DAYS = 30
+
+# Amazon's package-status vocabulary, normalised. The right-hand values are this
+# app's own and are what every consumer switches on, because the shape of a
+# fulfilment problem is the same whoever carried it: in flight, arrived, or
+# stopped somewhere it should not have.
+#
+# `UNKNOWN` is a real answer and not a parsing failure — a status Amazon has
+# added that is not in this map must not silently become "in transit", which is
+# the reassuring option and the wrong one.
+PACKAGE_STATUS_MAP = {
+	"PENDING": "pending",
+	"LABEL_PURCHASED": "pending",
+	"SHIPPED": "in_transit",
+	"IN_TRANSIT": "in_transit",
+	"OUT_FOR_DELIVERY": "in_transit",
+	"DELIVERING": "in_transit",
+	"DELIVERED": "delivered",
+	"AVAILABLE_FOR_PICKUP": "delivered",
+	"UNDELIVERABLE": "exception",
+	"RETURNING": "returned",
+	"RETURNED": "returned",
+	"LOST": "lost",
+	"DAMAGED": "exception",
+	"REJECTED": "exception",
+	"CANCELLED": "cancelled",
+	"CANCELED": "cancelled",
+}
+
 # --- Customer Feedback API (2024-06-01) -------------------------------------
 # The only review-adjacent data Amazon exposes, and it is not reviews.
 #
