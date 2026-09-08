@@ -27,13 +27,31 @@ class ReportCancelled(Exception):
 	"""Report finished as CANCELLED — treated as 'no data', not an error."""
 
 
-def create_report(client, report_type, marketplace_ids, *, data_start=None, data_end=None, context="health"):
-	"""Request a report; returns the reportId."""
+def create_report(
+	client,
+	report_type,
+	marketplace_ids,
+	*,
+	data_start=None,
+	data_end=None,
+	report_options=None,
+	context="health",
+):
+	"""Request a report; returns the reportId.
+
+	`report_options` is the report type's own parameters, and only some types
+	take any: the Sales & Traffic report needs asinGranularity and dateGranularity
+	to decide which sections it contains at all, and sending the key to a type
+	that takes no options is a 400 rather than a silently ignored field. So it is
+	omitted unless a caller asks for it.
+	"""
 	body = {"reportType": report_type, "marketplaceIds": marketplace_ids}
 	if data_start:
 		body["dataStartTime"] = data_start
 	if data_end:
 		body["dataEndTime"] = data_end
+	if report_options:
+		body["reportOptions"] = report_options
 	resp = client.post(f"{REPORTS_BASE}/reports", body=body, context=context)
 	return resp.get("reportId")
 
@@ -53,13 +71,10 @@ def poll_report(client, report_id, *, context="health"):
 		if status == "CANCELLED":
 			raise ReportCancelled(report_id)
 		if status == "FATAL":
-			raise SpApiError(
-				f"Report {report_id} ended FATAL", path=f"{REPORTS_BASE}/reports/{report_id}"
-			)
+			raise SpApiError(f"Report {report_id} ended FATAL", path=f"{REPORTS_BASE}/reports/{report_id}")
 		if time.monotonic() >= deadline:
 			raise SpApiError(
-				f"Report {report_id} did not finish within {REPORT_POLL_TIMEOUT}s "
-				f"(last status: {status})",
+				f"Report {report_id} did not finish within {REPORT_POLL_TIMEOUT}s (last status: {status})",
 				path=f"{REPORTS_BASE}/reports/{report_id}",
 			)
 		time.sleep(REPORT_POLL_INTERVAL)
@@ -93,7 +108,16 @@ def download_document(client, document_id, *, context="health"):
 	return content.decode("utf-8", errors="replace")
 
 
-def fetch_report(report_type, marketplace_ids, *, data_start=None, data_end=None, client=None, context="health"):
+def fetch_report(
+	report_type,
+	marketplace_ids,
+	*,
+	data_start=None,
+	data_end=None,
+	report_options=None,
+	client=None,
+	context="health",
+):
 	"""Convenience: run the full request->poll->download and return text.
 
 	Returns None when the report is CANCELLED (no data). Raises on FATAL/timeout.
@@ -101,7 +125,13 @@ def fetch_report(report_type, marketplace_ids, *, data_start=None, data_end=None
 	"""
 	client = client or SpApiClient()
 	report_id = create_report(
-		client, report_type, marketplace_ids, data_start=data_start, data_end=data_end, context=context
+		client,
+		report_type,
+		marketplace_ids,
+		data_start=data_start,
+		data_end=data_end,
+		report_options=report_options,
+		context=context,
 	)
 	try:
 		document_id = poll_report(client, report_id, context=context)
