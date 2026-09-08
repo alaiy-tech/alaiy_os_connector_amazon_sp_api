@@ -109,6 +109,11 @@ scheduler_events = {
 	"daily": [
 		"alaiy_os_connector_amazon_sp_api.tasks.sync_health",
 	],
+	"weekly": [
+		# Makes no API call itself: it marks catalog content stale so the
+		# six-hourly reconcile re-reads it within its existing budget.
+		"alaiy_os_connector_amazon_sp_api.tasks.refresh_catalog_facts",
+	],
 	"hourly": [
 		"alaiy_os_connector_amazon_sp_api.tasks.refresh_connection_status",
 	],
@@ -116,6 +121,13 @@ scheduler_events = {
 		# Every 6 hours: rebuild listing state (Phase 3).
 		"0 */6 * * *": [
 			"alaiy_os_connector_amazon_sp_api.tasks.reconcile_listings",
+		],
+		# Every 6 hours, offset from the listing reconcile so the two do not
+		# contend for the same rate limit: refresh FBA stock. Its own job rather
+		# than part of the reconcile because it needs a separate Amazon role, and
+		# a seller missing that role should lose stock figures only.
+		"30 */6 * * *": [
+			"alaiy_os_connector_amazon_sp_api.tasks.sync_fba_inventory",
 		],
 		# Every 10 minutes: pull orders updated since the watermark. Cheap when
 		# idle (one getOrders call returning nothing), so the cadence is set by

@@ -93,7 +93,31 @@ CATALOG_MAX_IDENTIFIERS = 20
 # product_description / bullet_point / generic_keyword, images carry the variant
 # set, summaries carry itemName as a fallback title, relationships carry the
 # variation family (parent/child ASINs + theme).
-CATALOG_CONTENT_INCLUDED_DATA = "summaries,attributes,images,relationships"
+# `identifiers` carries the UPC/EAN/GTIN Amazon holds for the ASIN, and
+# `classifications` the browse-node ancestry. Both are catalog facts rather than
+# seller contributions, which is exactly why they have to come from here:
+# `externally_assigned_product_identifier` in a *listing's* attributes is only
+# populated for a seller who created the ASIN, so for a reseller — most sellers —
+# it is simply absent, and matching a catalogue on it silently matches nothing.
+CATALOG_CONTENT_INCLUDED_DATA = (
+	"summaries,attributes,images,relationships,identifiers,classifications"
+)
+
+# Which product identifier wins when Amazon returns several for one ASIN, most
+# specific first. It usually returns both an EAN and the UPC inside it — the
+# same barcode, one zero-padded to 13 digits — so a single stored value has to
+# pick, and EAN is the one that survives that padding without ambiguity.
+#
+# Consumers matching across channels should compare the *full* list from
+# `identifiers_from` rather than this pick: a Shopify barcode holding the UPC
+# and an Amazon EAN of the same product differ by a leading zero and are not
+# equal as strings.
+PRODUCT_ID_PREFERENCE = ("EAN", "UPC", "GTIN", "ISBN")
+
+# How deep a browse-node chain we flatten into l1/l2/l3. Amazon's tree is
+# deeper than three in several categories; the schema has three columns, so a
+# longer chain keeps its two topmost nodes and its leaf and drops the middle.
+CATALOG_CATEGORY_LEVELS = 3
 
 # The relationship type that describes a variation family. The same array also
 # carries PACKAGE_HIERARCHY, which is a different thing entirely.
@@ -116,6 +140,22 @@ FULFILLMENT_CHANNEL_CODES = {
 	"DEFAULT": "DEFAULT",
 	"AMAZON": "AMAZON_NA",
 }
+
+# --- FBA Inventory API (v1) -------------------------------------------------
+# The only endpoint that knows what Amazon is holding. A Listings item's
+# `fulfillmentAvailability` is the quantity the *seller* declared, which for an
+# FBA SKU is nothing at all — see FULFILLMENT_CHANNEL_CODES above, where AMAZON
+# is annotated "quantity managed by Amazon".
+FBA_INVENTORY_SUMMARIES_PATH = "/fba/inventory/v1/summaries"
+
+# getInventorySummaries is granular per marketplace and takes no other
+# granularity in practice, though the parameter exists for future ones.
+FBA_INVENTORY_GRANULARITY = "Marketplace"
+
+# Pages are Amazon-sized (no pageSize parameter on this endpoint), so the cap is
+# on page count: a safety rail against a paging bug spinning a worker, not a
+# limit any real catalogue reaches.
+FBA_INVENTORY_MAX_PAGES = 200
 
 # --- Orders API (v0) --------------------------------------------------------
 ORDERS_PATH = "/orders/v0/orders"

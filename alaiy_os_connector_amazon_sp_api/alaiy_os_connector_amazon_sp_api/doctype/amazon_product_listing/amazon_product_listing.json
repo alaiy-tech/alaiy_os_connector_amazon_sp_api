@@ -38,6 +38,12 @@
   "bullet_points",
   "keywords",
   "extra_attributes",
+  "category_section",
+  "amazon_category_l1",
+  "amazon_category_l2",
+  "column_break_category",
+  "amazon_category_l3",
+  "amazon_browse_node_id",
   "issues_section",
   "suppression_reasons",
   "sync_section",
@@ -257,6 +263,45 @@
    "options": "JSON",
    "label": "Extra Attributes",
    "description": "A JSON object of additional Amazon attributes, keyed by attribute name, merged into a new-ASIN submission verbatim. This is how a product type's required attributes that no listing field holds (country_of_origin, recommended_browse_nodes, ...) get supplied. Ignored when publishing an offer against an existing ASIN."
+  },
+  {
+   "fieldname": "category_section",
+   "fieldtype": "Section Break",
+   "label": "Amazon Category",
+   "collapsible": 1,
+   "description": "Amazon's own browse-node ancestry for the ASIN, from the Catalog Items API. Three levels because that is what a profitability roll-up drills through; a deeper chain keeps its two topmost nodes and its leaf. See spapi.catalog.classifications_from."
+  },
+  {
+   "fieldname": "amazon_category_l1",
+   "fieldtype": "Data",
+   "label": "Category L1",
+   "in_standard_filter": 1,
+   "read_only": 1,
+   "description": "Top-level browse node."
+  },
+  {
+   "fieldname": "amazon_category_l2",
+   "fieldtype": "Data",
+   "label": "Category L2",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_category",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "amazon_category_l3",
+   "fieldtype": "Data",
+   "label": "Category L3",
+   "read_only": 1,
+   "description": "Leaf browse node — always the deepest, even where the middle was dropped."
+  },
+  {
+   "fieldname": "amazon_browse_node_id",
+   "fieldtype": "Data",
+   "label": "Browse Node ID",
+   "read_only": 1,
+   "description": "The leaf node's id, so nothing has to be reconstructed from the names."
   },
   {
    "fieldname": "issues_section",
