@@ -369,9 +369,12 @@ class TestSettledFees(UnitTestCase):
 		self.assertEqual(finances._magnitude({"currencyAmount": -42.5}), 42.5)
 		self.assertEqual(finances._magnitude(None), 0.0)
 
-	def _transaction(self, transaction_type, order_id, sku, commission, units=1):
+	def _transaction(
+		self, transaction_type, order_id, sku, commission, units=1, posted="2026-09-01T10:00:00Z"
+	):
 		return {
 			"transactionType": transaction_type,
+			"postedDate": posted,
 			"relatedIdentifiers": [{"relatedIdentifierName": "ORDER_ID", "relatedIdentifierValue": order_id}],
 			"totalAmount": {"currencyAmount": 499.0, "currencyCode": "INR"},
 			"items": [
@@ -455,6 +458,35 @@ class TestSettledFees(UnitTestCase):
 		self.assertEqual(result["by_sku"], {})
 		self.assertEqual(result["unattributed"]["other_fee"], 15.0)
 		self.assertEqual(result["unattributed"]["total_fee"], 15.0)
+
+	def test_the_day_rows_sum_to_the_window_total(self):
+		"""The invariant a consumer relies on to answer for a period of its own.
+
+		A window total cannot answer a narrower question and two overlapping
+		windows double-count, so `by_sku_day` is the grain that gets stored — and
+		it is only trustworthy if it reconciles with the total beside it.
+		"""
+		result = self._settled(
+			[
+				self._transaction("Shipment", "ORDER-1", "SKU-A", -30.0, posted="2026-09-01T10:00:00Z"),
+				self._transaction("Shipment", "ORDER-2", "SKU-A", -20.0, posted="2026-09-01T18:00:00Z"),
+				self._transaction("Shipment", "ORDER-3", "SKU-A", -10.0, posted="2026-09-02T09:00:00Z"),
+			]
+		)
+		days = [row for row in result["by_sku_day"] if row["sku"] == "SKU-A"]
+		self.assertEqual(len(days), 2)
+		self.assertEqual(sum(row["referral_fee"] for row in days), result["by_sku"]["SKU-A"]["referral_fee"])
+		first = next(row for row in days if str(row["posted_date"]) == "2026-09-01")
+		self.assertEqual((first["referral_fee"], first["units"]), (50.0, 2))
+
+	def test_a_transaction_amazon_dated_nothing_sorts_last_rather_than_raising(self):
+		result = self._settled(
+			[
+				self._transaction("Shipment", "ORDER-9", "SKU-Z", -5.0, posted=None),
+				self._transaction("Shipment", "ORDER-1", "SKU-A", -5.0, posted="2026-09-01T10:00:00Z"),
+			]
+		)
+		self.assertIsNone(result["by_sku_day"][-1]["posted_date"])
 
 	def test_every_settled_row_says_it_is_an_actual(self):
 		result = self._settled([self._transaction("Shipment", "ORDER-1", "SKU-A", -50.0)])

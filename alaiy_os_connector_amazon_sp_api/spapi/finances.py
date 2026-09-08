@@ -56,8 +56,9 @@ degraded margin table rather than an empty one.
 """
 
 import frappe
-from frappe.utils import flt
+from frappe.utils import flt, getdate
 
+from alaiy_os_connector_amazon_sp_api.spapi import times
 from alaiy_os_connector_amazon_sp_api.spapi.client import (
 	SpApiClient,
 	SpApiError,
@@ -145,6 +146,18 @@ def _order_id(transaction: dict) -> str | None:
 	return None
 
 
+def _posted_date(transaction: dict):
+	"""The day Amazon posted this transaction, as a date.
+
+	The *posted* date and not the order date, and the two are weeks apart. This
+	is when the money moved, which is the only date a settled figure can honestly
+	be filed under — attributing a settled fee back to the day of the sale would
+	put it in a period that has already been reported.
+	"""
+	posted = times.from_amazon_iso(transaction.get("postedDate"))
+	return getdate(posted) if posted else None
+
+
 def list_transactions(
 	posted_after,
 	posted_before=None,
@@ -200,10 +213,19 @@ def settled_fees(
 		{
 		  "by_sku": {sku: {referral_fee, fba_fee, other_fee, total_fee, units,
 						   orders, currency, basis: "actual"}},
+		  "by_sku_day": [{sku, posted_date, referral_fee, fba_fee, other_fee,
+		                  total_fee, units, orders, currency, basis}],
 		  "unattributed": {referral_fee, fba_fee, other_fee, total_fee},
 		  "currency": ...,
 		  "transactions": <how many sale transactions were read>,
 		}
+
+	**`by_sku_day` is the grain that matters and `by_sku` is a convenience over
+	it.** A consumer storing these has to answer for a period it chooses later,
+	and a window total can only ever answer for the window it was fetched with:
+	sum two overlapping windows and the fees are counted twice, ask a narrower
+	question of a wider total and there is no honest answer at all. A day is the
+	finest grain Amazon dates a transaction to, so it is the finest worth storing.
 
 	`unattributed` is fees Amazon charged on a transaction item carrying no
 	product context — order-level charges, and items whose SKU Amazon did not
@@ -220,6 +242,7 @@ def settled_fees(
 	)
 
 	by_sku: dict = {}
+	by_day: dict = {}
 	unattributed = {"referral_fee": 0.0, "fba_fee": 0.0, "other_fee": 0.0}
 	currency = None
 	counted = 0
@@ -229,6 +252,7 @@ def settled_fees(
 			continue
 		counted += 1
 		order_id = _order_id(transaction)
+		posted_date = _posted_date(transaction)
 		currency = currency or _currency(transaction.get("totalAmount"))
 
 		for item in transaction.get("items") or []:
@@ -257,13 +281,30 @@ def settled_fees(
 					"fulfillment_network": context.get("fulfillmentNetwork"),
 				},
 			)
-			for bucket in ("referral_fee", "fba_fee", "other_fee"):
-				row[bucket] += fees[bucket]
-			row["units"] += int(flt(context.get("quantityShipped")) or 0)
-			if order_id:
-				row["orders"].add(order_id)
+			day = by_day.setdefault(
+				(sku, posted_date),
+				{
+					"sku": sku,
+					"asin": context.get("asin"),
+					"posted_date": posted_date,
+					"referral_fee": 0.0,
+					"fba_fee": 0.0,
+					"other_fee": 0.0,
+					"units": 0,
+					"orders": set(),
+					"currency": fees["currency"] or currency,
+					"basis": "actual",
+				},
+			)
+			units = int(flt(context.get("quantityShipped")) or 0)
+			for target in (row, day):
+				for bucket in ("referral_fee", "fba_fee", "other_fee"):
+					target[bucket] += fees[bucket]
+				target["units"] += units
+				if order_id:
+					target["orders"].add(order_id)
 
-	for row in by_sku.values():
+	for row in list(by_sku.values()) + list(by_day.values()):
 		# A set while accumulating so an order appearing in two transactions —
 		# a partial shipment, then the rest — counts once; a list on the way out
 		# because a set is not JSON.
@@ -277,6 +318,11 @@ def settled_fees(
 
 	return {
 		"by_sku": by_sku,
+		# Sorted so a consumer writing rows gets a stable order, and a transaction
+		# Amazon dated nothing sorts last rather than raising on a None comparison.
+		"by_sku_day": sorted(
+			by_day.values(), key=lambda r: (str(r["posted_date"] or "9999-12-31"), r["sku"])
+		),
 		"unattributed": unattributed,
 		"currency": currency,
 		"transactions": counted,
