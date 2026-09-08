@@ -39,6 +39,7 @@ from alaiy_os_connector_amazon_sp_api.spapi import (
 	health,
 	inventory,
 	listings,
+	packages,
 	pricing,
 	product_types,
 	reconcile,
@@ -439,6 +440,46 @@ def get_settled_fees(days=30, marketplace=None, connection=None):
 	posted_after = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-(cint(days) or 30))
 	return finances.settled_fees(
 		posted_after.isoformat(),
+		marketplace=marketplace,
+		connection=connection,
+	)
+
+
+# --- shipments (Phase 6) -----------------------------------------------------
+# Reads only, and stateless. The order sync writes Sales Orders; whether a
+# package row belongs on one is a schema decision that has not been made, and a
+# Desk button that made it silently would be the worst way to make it.
+
+
+@frappe.whitelist()
+def get_order_packages(order_ids):
+	"""Carrier and tracking for merchant-fulfilled orders, by Amazon order id.
+
+	MFN only — an FBA order carries no packages on the order and answers with an
+	empty array rather than an error. `get_fba_shipments` is the other half. See
+	`spapi/packages.py` on why those two sources cannot be merged into one call.
+	"""
+	_require_manager()
+	wanted = _as_list(order_ids)
+	if not wanted:
+		frappe.throw(_("Name at least one Amazon order id."))
+	return packages.order_packages(wanted)
+
+
+@frappe.whitelist()
+def get_fba_shipments(days=7, marketplace=None, connection=None):
+	"""Amazon's own shipments for this seller over the last `days`.
+
+	The window is capped by the report itself (see FBA_SHIPMENTS_MAX_WINDOW_DAYS)
+	and a wider request is refused rather than truncated — a backfill that
+	quietly returned one month of three would leave two months looking like a
+	seller with no FBA shipments at all.
+	"""
+	_require_manager()
+	window = cint(days) or 7
+	return packages.fba_shipments(
+		frappe.utils.add_days(frappe.utils.nowdate(), -window),
+		frappe.utils.nowdate(),
 		marketplace=marketplace,
 		connection=connection,
 	)
