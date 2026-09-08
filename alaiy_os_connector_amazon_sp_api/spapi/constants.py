@@ -99,9 +99,7 @@ CATALOG_MAX_IDENTIFIERS = 20
 # `externally_assigned_product_identifier` in a *listing's* attributes is only
 # populated for a seller who created the ASIN, so for a reseller — most sellers —
 # it is simply absent, and matching a catalogue on it silently matches nothing.
-CATALOG_CONTENT_INCLUDED_DATA = (
-	"summaries,attributes,images,relationships,identifiers,classifications"
-)
+CATALOG_CONTENT_INCLUDED_DATA = "summaries,attributes,images,relationships,identifiers,classifications"
 
 # Which product identifier wins when Amazon returns several for one ASIN, most
 # specific first. It usually returns both an EAN and the UPC inside it — the
@@ -339,3 +337,57 @@ DEFAULT_MARKETPLACES = [
 	("A1VC38T7YXB528", "Japan", "JP", "FE", "JPY", "amazon.co.jp", "ja_JP"),
 	("A39IBJ37TRP1C6", "Australia", "AU", "FE", "AUD", "amazon.com.au", "en_AU"),
 ]
+
+# --- Customer Feedback API (2024-06-01) -------------------------------------
+# The only review-adjacent data Amazon exposes, and it is not reviews.
+#
+# **There is no product-review-text endpoint on SP-API, at any version.** Not in
+# preview, not gated behind a role. A seller's own reviews are readable only by
+# logging into Seller Central. So the Ratings tab's "3 reviews this week mention
+# 'zipper'" cannot be built from this API — see the module docstring on
+# `spapi/customer_feedback.py`, which is shaped around not letting a caller
+# believe otherwise.
+#
+# What this API does give is aggregate: which topics customers raise about an
+# ASIN, with a sentiment, and how the rating is trending. That supports "quality
+# complaints about this product are rising" and never a quotable sentence.
+CUSTOMER_FEEDBACK_BASE = "/customerFeedback/2024-06-01"
+
+# Per-ASIN aggregated review topics, and the rating trend behind them.
+CUSTOMER_FEEDBACK_ITEM_TOPICS = CUSTOMER_FEEDBACK_BASE + "/items/{asin}/reviews/topics"
+CUSTOMER_FEEDBACK_ITEM_TRENDS = CUSTOMER_FEEDBACK_BASE + "/items/{asin}/reviews/trends"
+
+# Amazon refreshes these weekly and only for English-language marketplaces, a
+# subset of the ones this app supports.
+#
+# **There is deliberately no list of supported marketplaces here.** A hardcoded
+# one is wrong in both directions the moment Amazon changes it: too narrow and
+# the feature is silently disabled for a seller who could use it, too wide and
+# every sync logs an error for a marketplace that was never going to answer. So
+# Amazon is asked, and a refusal is reported as `supported: False` with the
+# reason it gave. See `_unsupported` in customer_feedback.py.
+#
+# The weekly cadence is the constant worth having, because it decides what a
+# caller may claim: a topic that appeared today has been building for up to a
+# week, and nothing here is a near-real-time signal.
+CUSTOMER_FEEDBACK_REFRESH_DAYS = 7
+
+# Sentiment values Amazon labels a topic with, normalised to lower case by the
+# reader. Held here so a consumer can switch on them without matching strings
+# Amazon might capitalise differently.
+FEEDBACK_SENTIMENT_POSITIVE = "positive"
+FEEDBACK_SENTIMENT_NEGATIVE = "negative"
+FEEDBACK_SENTIMENT_NEUTRAL = "neutral"
+
+# --- Seller feedback aggregation --------------------------------------------
+# Amazon counts 1- and 2-star buyer feedback as negative, and that is the
+# definition Order Defect Rate is built on. Stated once here so the seller
+# rating and the account-health metric cannot drift apart on what "negative"
+# means.
+FEEDBACK_NEGATIVE_MAX_RATING = 2
+FEEDBACK_POSITIVE_MIN_RATING = 4
+
+# Amazon's own Buy Box eligibility guidance sits around this share of positive
+# feedback. Used as the reference line on the seller-rating trend, not as a
+# threshold this app enforces.
+FEEDBACK_POSITIVE_TARGET_PCT = 95.0
