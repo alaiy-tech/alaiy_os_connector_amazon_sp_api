@@ -35,9 +35,12 @@ from alaiy_os_connector_amazon_sp_api import app_config as config
 from alaiy_os_connector_amazon_sp_api import connections, csv_export, links, oauth, sales
 from alaiy_os_connector_amazon_sp_api.spapi import (
 	customer_feedback,
+	fees,
+	finances,
 	health,
 	inventory,
 	listings,
+	pricing,
 	product_types,
 	reconcile,
 	submissions,
@@ -381,6 +384,143 @@ def get_fba_inventory(marketplace=None, connection=None, sku=None, limit=200):
 		],
 		order_by="fulfillable_qty asc, seller_sku asc",
 		limit_page_length=cint(limit) or 200,
+	)
+
+
+# --- fees, pricing and settled finances (Phase 6) ----------------------------
+# All three are live Amazon calls on separate SP-API roles, so all three carry
+# the manager gate. None of them stores anything: these are the operator's view
+# of what the self-serve app reads on a schedule, and a Desk button that wrote
+# rows nobody scheduled would put a second writer on the same data.
+
+
+def _priced_listings(skus, marketplace, connection):
+	"""The listing rows a fee estimate can be quoted against.
+
+	A fee estimate is a function of the price, so a row without one cannot be
+	quoted and is dropped rather than sent at zero — Amazon answers a zero price
+	with a zero commission, which is a wrong number rather than an error.
+
+	`fulfillment_channel` decides which fee schedule Amazon quotes and is read off
+	the row rather than defaulted, for the reason in `spapi/fees.py`: asking for
+	the wrong schedule returns a confident wrong answer.
+	"""
+	conn = connections.resolve(connection)
+	filters = {"price": (">", 0)}
+	marketplace = marketplace or conn.primary_marketplace
+	if marketplace:
+		filters["marketplace"] = marketplace
+	if skus:
+		filters["sku"] = ("in", _as_list(skus))
+
+	rows = frappe.get_all(
+		"Amazon Product Listing",
+		filters=filters,
+		fields=["sku", "asin", "price", "currency", "fulfillment_channel"],
+		order_by="sku asc",
+	)
+	return [
+		{
+			"sku": row.sku,
+			"asin": row.asin,
+			"price": row.price,
+			"currency": row.currency,
+			# The register stores Amazon's own code; AMAZON-prefixed values are the
+			# FBA schedule (see FULFILLMENT_CHANNEL_CODES).
+			"fba": (row.fulfillment_channel or "").upper().startswith("AMAZON"),
+		}
+		for row in rows
+	]
+
+
+@frappe.whitelist()
+def get_fee_estimates(skus=None, marketplace=None, connection=None):
+	"""What Amazon would charge on each listed SKU at its current price.
+
+	An estimate, always, and the return says so on every row (`basis`). See
+	`spapi/fees.py` on why the estimate is the primary figure rather than the
+	fallback, and `get_settled_fees` for what Amazon actually took.
+	"""
+	_require_manager()
+	items = _priced_listings(skus, marketplace, connection)
+	if not items:
+		return {"estimates": {}, "quoted": 0, "skipped": "No listings with a price to quote against."}
+
+	estimates = fees.estimate_fees(items, marketplace=marketplace, connection=connection)
+	return {
+		"estimates": estimates,
+		"quoted": len(estimates),
+		"requested": len(items),
+	}
+
+
+@frappe.whitelist()
+def get_buy_box_summary(asins=None, marketplace=None, connection=None, days=7):
+	"""Who holds the Buy Box now, and what share of the last week we held it.
+
+	Two different sources answering two different questions — a live pricing call
+	and a business report. `spapi/pricing.py` is where the distinction is argued;
+	the short version is that nothing in the Pricing API knows the share, and
+	nothing in the report knows the current price.
+
+	The share half is best-effort. It needs a role the price half does not, and a
+	seller missing it should still learn what they are being undercut by.
+	"""
+	_require_manager()
+
+	conn = connections.resolve(connection)
+	if asins:
+		wanted = _as_list(asins)
+	else:
+		wanted = [
+			row.asin
+			for row in frappe.get_all(
+				"Amazon Product Listing",
+				filters={"marketplace": marketplace or conn.primary_marketplace, "asin": ("is", "set")},
+				fields=["asin"],
+				order_by="sku asc",
+			)
+		]
+
+	prices = pricing.competitive_summary(wanted, marketplace=marketplace, connection=connection)
+
+	share = {}
+	share_error = None
+	try:
+		share = pricing.buy_box_share(
+			frappe.utils.add_days(frappe.utils.nowdate(), -cint(days) or -7),
+			frappe.utils.nowdate(),
+			marketplace=marketplace,
+			connection=connection,
+		)
+	except Exception as e:
+		# Reported, not raised, and not swallowed either: a caller has to be able
+		# to tell "we won 0% of the Buy Box" from "we could not find out".
+		share_error = str(e)
+
+	return {
+		"prices": prices,
+		"share": share,
+		"share_error": share_error,
+		"days": cint(days) or 7,
+	}
+
+
+@frappe.whitelist()
+def get_settled_fees(days=30, marketplace=None, connection=None):
+	"""Fees Amazon has actually taken, per SKU, over the last `days`.
+
+	Settled figures only. A sale settles two to four weeks after it happens, so
+	the recent end of any window this returns is legitimately empty — that is the
+	endpoint working, not a sync that has fallen behind, and it is why
+	`get_fee_estimates` exists alongside it.
+	"""
+	_require_manager()
+	posted_after = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-(cint(days) or 30))
+	return finances.settled_fees(
+		posted_after.isoformat(),
+		marketplace=marketplace,
+		connection=connection,
 	)
 
 
