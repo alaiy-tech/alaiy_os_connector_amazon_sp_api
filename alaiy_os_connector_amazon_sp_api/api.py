@@ -31,14 +31,13 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 
-from alaiy_os_connector_amazon_sp_api import connections
-
 from alaiy_os_connector_amazon_sp_api import app_config as config
-from alaiy_os_connector_amazon_sp_api import csv_export, links, oauth, sales
+from alaiy_os_connector_amazon_sp_api import connections, csv_export, links, oauth, sales
 from alaiy_os_connector_amazon_sp_api.spapi import (
 	health,
 	inventory,
 	listings,
+	packages,
 	product_types,
 	reconcile,
 	submissions,
@@ -63,9 +62,7 @@ def get_connection_status(connection=None):
 	conn = connections.resolve(connection)
 	marketplace_id = None
 	if conn.primary_marketplace:
-		marketplace_id = frappe.db.get_value(
-			"Amazon Marketplace", conn.primary_marketplace, "marketplace_id"
-		)
+		marketplace_id = frappe.db.get_value("Amazon Marketplace", conn.primary_marketplace, "marketplace_id")
 	return {
 		"status": conn.last_status or "not_configured",
 		"message": conn.last_status_message,
@@ -230,7 +227,9 @@ def get_health_summary(marketplace=None, connection=None):
 		order_by="section asc, metric_label asc",
 	)
 
-	overall = health.rollup_status([m["health_status"] for m in metrics]) if metrics else HEALTH_STATUS_UNKNOWN
+	overall = (
+		health.rollup_status([m["health_status"] for m in metrics]) if metrics else HEALTH_STATUS_UNKNOWN
+	)
 	synced_at = max((m["synced_at"] for m in metrics if m["synced_at"]), default=None)
 
 	feedback = frappe.get_all(
@@ -303,6 +302,46 @@ def get_fba_inventory(marketplace=None, connection=None, sku=None, limit=200):
 		],
 		order_by="fulfillable_qty asc, seller_sku asc",
 		limit_page_length=cint(limit) or 200,
+	)
+
+
+# --- shipments (Phase 6) -----------------------------------------------------
+# Reads only, and stateless. The order sync writes Sales Orders; whether a
+# package row belongs on one is a schema decision that has not been made, and a
+# Desk button that made it silently would be the worst way to make it.
+
+
+@frappe.whitelist()
+def get_order_packages(order_ids):
+	"""Carrier and tracking for merchant-fulfilled orders, by Amazon order id.
+
+	MFN only — an FBA order carries no packages on the order and answers with an
+	empty array rather than an error. `get_fba_shipments` is the other half. See
+	`spapi/packages.py` on why those two sources cannot be merged into one call.
+	"""
+	_require_manager()
+	wanted = _as_list(order_ids)
+	if not wanted:
+		frappe.throw(_("Name at least one Amazon order id."))
+	return packages.order_packages(wanted)
+
+
+@frappe.whitelist()
+def get_fba_shipments(days=7, marketplace=None, connection=None):
+	"""Amazon's own shipments for this seller over the last `days`.
+
+	The window is capped by the report itself (see FBA_SHIPMENTS_MAX_WINDOW_DAYS)
+	and a wider request is refused rather than truncated — a backfill that
+	quietly returned one month of three would leave two months looking like a
+	seller with no FBA shipments at all.
+	"""
+	_require_manager()
+	window = cint(days) or 7
+	return packages.fba_shipments(
+		frappe.utils.add_days(frappe.utils.nowdate(), -window),
+		frappe.utils.nowdate(),
+		marketplace=marketplace,
+		connection=connection,
 	)
 
 
@@ -699,9 +738,7 @@ def _assert_orders_configured(connection=None):
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 	if not conn.orders_customer:
-		frappe.throw(
-			_("Set a Default Customer under Orders on the Amazon Connection before syncing orders.")
-		)
+		frappe.throw(_("Set a Default Customer under Orders on the Amazon Connection before syncing orders."))
 	return conn
 
 
