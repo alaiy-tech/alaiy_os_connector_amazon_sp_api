@@ -34,6 +34,7 @@ from frappe.utils import cint
 from alaiy_os_connector_amazon_sp_api import app_config as config
 from alaiy_os_connector_amazon_sp_api import connections, csv_export, links, oauth, sales
 from alaiy_os_connector_amazon_sp_api.spapi import (
+	customer_feedback,
 	fees,
 	finances,
 	health,
@@ -249,6 +250,85 @@ def get_health_summary(marketplace=None, connection=None):
 		"feedback": feedback,
 		"synced_at": synced_at,
 	}
+
+
+# --- ratings (Phase 6) -------------------------------------------------------
+# Two reads about two different things, and the distinction is the point:
+# `get_seller_rating` is what buyers think of this *business*, which is what
+# Amazon judges the account on; `get_review_topics` is what they think of a
+# *product*. Amazon keeps them separate and so does this app.
+
+
+@frappe.whitelist()
+def get_seller_rating(limit=200):
+	"""This seller's rating, aggregated from the feedback rows already synced.
+
+	No Amazon call: `Seller Feedback` is filled by the daily health sync, and
+	Amazon publishes no aggregate seller rating through SP-API — the average and
+	the positive share are arithmetic over the individual rows. Gated on the
+	doctype it reads rather than on the manager roles, like the other register
+	reads here.
+
+	The figures are as fresh as the last health sync and no fresher, which is
+	what `synced_at` is for.
+	"""
+	if not frappe.has_permission("Seller Feedback", "read"):
+		frappe.throw(_("You are not permitted to read seller feedback."), frappe.PermissionError)
+
+	rows = frappe.get_all(
+		"Seller Feedback",
+		fields=["order_id", "rating", "comment", "feedback_date", "modified"],
+		order_by="feedback_date desc",
+		limit_page_length=cint(limit) or 200,
+	)
+	return {
+		**health.summarise_feedback(rows),
+		"rows": rows,
+		"synced_at": max((r.modified for r in rows if r.modified), default=None),
+	}
+
+
+@frappe.whitelist()
+def get_review_topics(asins=None, marketplace=None, connection=None, trends=0):
+	"""What customers raise about a product, in aggregate.
+
+	**Not reviews.** SP-API has no product-review-text endpoint at any version,
+	so this returns topics and sentiments and never a quotable sentence — see the
+	module docstring on `spapi/customer_feedback.py`, which is shaped around not
+	letting a caller believe otherwise.
+
+	Amazon refreshes these weekly and covers only English-language marketplaces.
+	An ASIN outside that comes back `supported: false` with Amazon's own reason
+	rather than as an empty topic list, so a caller can tell "nothing to report"
+	from "not covered here".
+	"""
+	_require_manager()
+
+	conn = connections.resolve(connection)
+	if asins:
+		wanted = _as_list(asins)
+	else:
+		wanted = [
+			row.asin
+			for row in frappe.get_all(
+				"Amazon Product Listing",
+				filters={
+					"marketplace": marketplace or conn.primary_marketplace,
+					"asin": ("is", "set"),
+				},
+				fields=["asin"],
+				order_by="sku asc",
+			)
+		]
+
+	result = {
+		"topics": customer_feedback.review_topics(wanted, marketplace=marketplace, connection=connection)
+	}
+	if cint(trends):
+		result["trends"] = customer_feedback.review_trends(
+			wanted, marketplace=marketplace, connection=connection
+		)
+	return result
 
 
 # --- FBA inventory -----------------------------------------------------------
