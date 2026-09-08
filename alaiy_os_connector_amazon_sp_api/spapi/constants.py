@@ -99,9 +99,7 @@ CATALOG_MAX_IDENTIFIERS = 20
 # `externally_assigned_product_identifier` in a *listing's* attributes is only
 # populated for a seller who created the ASIN, so for a reseller — most sellers —
 # it is simply absent, and matching a catalogue on it silently matches nothing.
-CATALOG_CONTENT_INCLUDED_DATA = (
-	"summaries,attributes,images,relationships,identifiers,classifications"
-)
+CATALOG_CONTENT_INCLUDED_DATA = "summaries,attributes,images,relationships,identifiers,classifications"
 
 # Which product identifier wins when Amazon returns several for one ASIN, most
 # specific first. It usually returns both an EAN and the UPC inside it — the
@@ -339,3 +337,134 @@ DEFAULT_MARKETPLACES = [
 	("A1VC38T7YXB528", "Japan", "JP", "FE", "JPY", "amazon.co.jp", "ja_JP"),
 	("A39IBJ37TRP1C6", "Australia", "AU", "FE", "AUD", "amazon.com.au", "en_AU"),
 ]
+
+# --- Product Fees API (v0) --------------------------------------------------
+# What Amazon will take out of a sale, *before* it happens. The Finances API
+# says what it actually took, but only once the order has settled — which for a
+# sale made this week is somewhere between two and four weeks away. A margin
+# figure that waited for settlement would be blank on exactly the products a
+# seller is currently deciding about, so both are read and every fee this app
+# reports carries which of the two it came from.
+FEES_ESTIMATE_BATCH_PATH = "/products/fees/v0/feesEstimate"
+
+# Amazon's own ceiling on one batch request.
+FEES_ESTIMATE_BATCH_SIZE = 20
+
+# getMyFeesEstimates is rate-limited at 0.5 requests a second with a burst of
+# 1 — the tightest limit in this app, tighter even than getOrderItems. The
+# client's 429-retry alone would spend a whole sync backing off, so batches are
+# paced by this rather than by the backoff.
+FEES_ESTIMATE_MIN_INTERVAL = 2.0  # seconds between batch calls
+
+# Amazon returns one FeeDetail per charge with no grouping, and the set differs
+# per marketplace and per fulfilment channel. These are the buckets this app
+# reports, because they are the three a seller reasons about: what Amazon takes
+# for the sale, what it takes for the shipping, and everything else.
+#
+# ReferralFee is the commission. VariableClosingFee and PerItemFee are separate
+# charges Amazon levies on media and on individual-plan sellers respectively;
+# they are commission in every sense that matters to a margin, so they land in
+# the same bucket rather than in "other" where nobody would look for them.
+FEE_TYPES_REFERRAL = ("ReferralFee", "VariableClosingFee", "PerItemFee")
+
+# The FBA family. `FBAFees` is the roll-up Amazon sends for most marketplaces,
+# with the pick-pack and weight-handling components nested inside it under
+# IncludedFeeDetailList; the per-unit and per-order names are what older
+# marketplaces send instead. Summing the roll-up *and* its own components would
+# double-count, which is why `fees.py` never descends into IncludedFeeDetailList.
+FEE_TYPES_FBA = (
+	"FBAFees",
+	"FBAFulfillmentFee",
+	"FBAPerUnitFulfillmentFee",
+	"FBAPerOrderFulfillmentFee",
+	"FBAWeightBasedFee",
+	"FBATransportationFee",
+)
+
+# Amazon needs telling which fee schedule to quote. A SKU fulfilled by Amazon is
+# charged the FBA schedule and a merchant-fulfilled one is not, and asking for
+# the wrong one does not error — it returns a confidently wrong number.
+FEES_FBA_PROGRAM = "FBA_CORE"
+
+# --- Product Pricing API (2022-05-01) ---------------------------------------
+# The competitive read. v0's getItemOffers still works, but 2022-05-01 is where
+# Amazon's development went and it answers in one batch what v0 answers per
+# ASIN — so a page of listings costs one call rather than twenty.
+COMPETITIVE_SUMMARY_PATH = "/batches/products/pricing/2022-05-01/items/competitiveSummary"
+
+# Amazon's ceiling on one competitiveSummary batch.
+COMPETITIVE_SUMMARY_BATCH_SIZE = 20
+
+# What to ask for per ASIN. `featuredBuyingOptions` carries the Buy Box winner's
+# price, which is the only way to learn what a seller is being beaten by;
+# `referencePrices` carries Amazon's own competitive and list prices.
+COMPETITIVE_SUMMARY_INCLUDED_DATA = ("featuredBuyingOptions", "referencePrices")
+
+# The buying option Amazon calls the Buy Box. It sends others (used, subscribe
+# and save) in the same array, and treating the first entry as the Buy Box price
+# would compare a new-condition listing against a used offer.
+FEATURED_OFFER_BUYING_OPTION = "New"
+
+# How stale a competitive price is allowed to get before it is worth nothing.
+# The Buy Box changes within hours, so a price snapshot from yesterday is
+# history rather than a decision input — see the cadence note in
+# `alaiy_os_self_serve_apis.selfserve.profitability`.
+COMPETITIVE_PRICE_MAX_AGE_HOURS = 6
+
+# --- Buy Box win rate ------------------------------------------------------
+# Not a pricing endpoint at all, and this is the single most-missed fact about
+# Buy Box data on SP-API: `getCompetitiveSummary` says who holds the Buy Box
+# *right now*, and nothing anywhere says what share of the day a seller held it.
+# That figure — the one a seller means by "Buy Box win rate" — exists only in the
+# Sales & Traffic business report, per ASIN, as `buyBoxPercentage`.
+#
+# So the win rate is a report and the competitor price is an API call, on
+# different cadences, and this app never derives one from the other.
+REPORT_SALES_AND_TRAFFIC = "GET_SALES_AND_TRAFFIC_REPORT"
+
+# The report's own granularity vocabulary. DAY is the finest it offers per ASIN.
+SALES_AND_TRAFFIC_GRANULARITY = "DAY"
+
+# --- Finances API (2024-06-19) ----------------------------------------------
+# The settled truth. `listTransactions` replaced the twenty-odd event-type
+# arrays of `/finances/v0/financialEvents` with one shape, which is why this app
+# reads fee actuals here and keeps the v0 call only for the two counters
+# `spapi.health` needs from it.
+TRANSACTIONS_PATH = "/finances/2024-06-19/transactions"
+
+# Page cap. A month of transactions for a busy seller runs to thousands of rows
+# and the caller wants a fee total, not the ledger — this is the rail that keeps
+# a paging bug from spinning a worker.
+TRANSACTIONS_MAX_PAGES = 50
+
+# The transaction types that carry a sale's fees. Amazon files a refund's fee
+# reversal under `Refund` with positive amounts, so a fee total that swept up
+# every type would net a refunded referral fee against a charged one and report
+# less commission than was paid.
+TRANSACTION_TYPES_SALE = ("Shipment", "Order")
+
+# The breakdown the settled feed files fees under, and the names inside it.
+# Amazon's settled vocabulary is not its estimate vocabulary: the commission a
+# fee estimate calls `ReferralFee` arrives here as `Commission`. Both spellings
+# are listed rather than mapped, because a marketplace sending the estimate's
+# name into the settled feed should still land in the referral bucket.
+TRANSACTION_FEES_BREAKDOWN = "Fees"
+SETTLED_FEE_REFERRAL_NAMES = (
+	"Commission",
+	"ReferralFee",
+	"VariableClosingFee",
+	"PerItemFee",
+)
+
+# Matched as a prefix, unlike the estimate side's exact tuple. The settled feed
+# carries a long tail of FBA charge names that differ per marketplace and grows
+# whenever Amazon adds a programme (`FBAPerUnitFulfillmentFee`,
+# `FBAWeightBasedFee`, `FBADisposalFee`, …). An exact list would silently file
+# next quarter's new fee name under "other"; every one of them is a fulfilment
+# charge and belongs in the same bucket.
+SETTLED_FEE_FBA_PREFIX = "FBA"
+
+# The context Amazon attaches a product to a transaction item with. Without it a
+# fee is real money against an order but cannot be attributed to a SKU, which is
+# the grain the whole margin table is computed at.
+TRANSACTION_PRODUCT_CONTEXT = "ProductContext"
