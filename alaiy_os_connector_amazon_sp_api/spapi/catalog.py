@@ -27,10 +27,12 @@ from frappe.utils import cint
 
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
+	CATALOG_CATEGORY_LEVELS,
 	CATALOG_CONTENT_INCLUDED_DATA,
 	CATALOG_ITEMS_PATH,
 	CATALOG_MAX_IDENTIFIERS,
 	CATALOG_VARIATION_RELATIONSHIP,
+	PRODUCT_ID_PREFERENCE,
 )
 
 # Amazon's image variants, in the order our schema wants them: MAIN becomes the
@@ -130,6 +132,95 @@ def _variation_from(item, marketplace_id):
 	return empty
 
 
+def identifiers_from(item, marketplace_id):
+	"""Every product identifier Amazon holds for this ASIN, most specific first.
+
+	This is the barcode, and it is the reason `identifiers` was added to
+	CATALOG_CONTENT_INCLUDED_DATA. The seller's own
+	`externally_assigned_product_identifier` attribute answers the same question
+	and is populated only for a seller who *created* the ASIN — so for a reseller
+	it is absent, and a catalogue matched on it matches nothing at all while
+	looking like it ran.
+
+	The full list is returned rather than one value because Amazon commonly holds
+	both an EAN and the UPC inside it: `0819752013274` and `819752013274` are the
+	same barcode and are not equal as strings. A caller matching against another
+	channel should compare every value here, not just the pick.
+	"""
+	block = _pick_for_marketplace(item.get("identifiers"), marketplace_id) or {}
+	out = []
+	seen = set()
+	for entry in block.get("identifiers") or []:
+		kind = (entry.get("identifierType") or "").upper().strip()
+		value = (entry.get("identifier") or "").strip()
+		if not kind or not value or (kind, value) in seen:
+			continue
+		seen.add((kind, value))
+		out.append({"type": kind, "value": value})
+
+	order = {kind: i for i, kind in enumerate(PRODUCT_ID_PREFERENCE)}
+	out.sort(key=lambda e: order.get(e["type"], len(order)))
+	return out
+
+
+def _category_chain(node):
+	"""One classification flattened root-first.
+
+	Amazon nests the ancestry the other way up — the leaf carries a `parent`,
+	which carries its own — so the walk collects leaf-first and reverses. The
+	guard on `seen` is not paranoia about Amazon: a self-referential parent would
+	otherwise spin here forever, and this runs inside a sync.
+	"""
+	chain = []
+	seen = set()
+	while isinstance(node, dict):
+		node_id = node.get("classificationId")
+		name = (node.get("displayName") or "").strip()
+		if name:
+			chain.append({"id": node_id, "name": name})
+		if node_id in seen:
+			break
+		seen.add(node_id)
+		node = node.get("parent")
+	chain.reverse()
+	return chain
+
+
+def classifications_from(item, marketplace_id):
+	"""The ASIN's browse-node ancestry, flattened to l1/l2/l3 + the leaf node id.
+
+	An ASIN can sit in several browse nodes; the first is taken, which is the one
+	Amazon returns as primary.
+
+	The schema has three levels and Amazon's tree is deeper than three in several
+	categories. A longer chain keeps its two topmost nodes and its leaf, and drops
+	what is between — the levels stay comparable across products, which is what a
+	roll-up needs, at the cost of detail no column exists for. `browse_node_id` is
+	always the leaf, so nothing has to be reconstructed from the names.
+	"""
+	empty = {"category_l1": None, "category_l2": None, "category_l3": None, "browse_node_id": None}
+	block = _pick_for_marketplace(item.get("classifications"), marketplace_id) or {}
+	nodes = block.get("classifications") or []
+	if not nodes:
+		return empty
+
+	chain = _category_chain(nodes[0])
+	if not chain:
+		return empty
+
+	if len(chain) > CATALOG_CATEGORY_LEVELS:
+		chain = [*chain[: CATALOG_CATEGORY_LEVELS - 1], chain[-1]]
+
+	names = [n["name"] for n in chain]
+	names += [None] * (CATALOG_CATEGORY_LEVELS - len(names))
+	return {
+		"category_l1": names[0],
+		"category_l2": names[1],
+		"category_l3": names[2],
+		"browse_node_id": chain[-1]["id"],
+	}
+
+
 def content_from_item(item, mp):
 	"""Normalise one catalog item into the fields of an Amazon Product Listing.
 
@@ -160,6 +251,8 @@ def content_from_item(item, mp):
 		if main_image.get("link"):
 			images = [{"url": main_image["link"], "is_main": True}]
 
+	product_ids = identifiers_from(item, marketplace_id)
+
 	return {
 		"title": (titles[0] if titles else None) or summary.get("itemName") or None,
 		"brand": (brands[0] if brands else None) or summary.get("brand") or None,
@@ -167,6 +260,12 @@ def content_from_item(item, mp):
 		"bullets": _attr_values(attributes, "bullet_point", marketplace_id, language),
 		"keywords": _attr_values(attributes, "generic_keyword", marketplace_id, language),
 		"images": images,
+		# The whole list, for a caller matching barcodes across channels, and the
+		# single pick the register row has one field for.
+		"product_ids": product_ids,
+		"product_id": product_ids[0]["value"] if product_ids else None,
+		"product_id_type": product_ids[0]["type"] if product_ids else None,
+		**classifications_from(item, marketplace_id),
 		**_variation_from(item, marketplace_id),
 	}
 

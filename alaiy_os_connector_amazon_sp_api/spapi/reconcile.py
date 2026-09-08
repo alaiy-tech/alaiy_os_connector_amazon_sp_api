@@ -32,7 +32,7 @@ import io
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, now_datetime
+from frappe.utils import add_days, cint, flt, now_datetime
 
 from alaiy_os_connector_amazon_sp_api import connections
 
@@ -43,6 +43,7 @@ from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	REPORT_MERCHANT_LISTINGS_ALL,
 )
 from alaiy_os_connector_amazon_sp_api.spapi.listings import (
+	_apply_catalog_facts,
 	_apply_content,
 	_apply_variation,
 	_marketplace,
@@ -80,6 +81,43 @@ def reconcile_all_listings(marketplace=None, notify_user=None, connection=None):
 	if notify_user:
 		frappe.publish_realtime("amazon_reconcile_complete", summary, user=notify_user)
 	return summary
+
+
+def mark_catalog_stale(marketplace=None, connection=None, older_than_days=None, missing_field=None):
+	"""Let the next reconcile re-read the catalog for rows it considers done.
+
+	Enrichment is once-per-row by design — `catalog_synced_at` is the flag, and it
+	is what keeps a steady-state reconcile from spending a single API call. That
+	design has one consequence: a *new* catalog field reaches no row that was
+	already enriched, ever. Clearing the flag is how a field arrives, and how the
+	weekly refresh in issue #64 is expressed without a second fetch path — the
+	existing budgeted machinery does the work on its next run and drains the
+	backlog across runs.
+
+	`older_than_days` refreshes rows last enriched before then; `missing_field`
+	narrows to rows where one column is still empty, which is what a backfill for
+	a newly added field wants. With neither, every enriched row on the marketplace
+	is marked stale, which on a large catalogue is several thousand API calls
+	spread over the following days — deliberate, and worth being explicit about.
+
+	Suppressed and inactive listings are included. It is tempting to refresh only
+	active ones, but a suppressed listing is precisely the row an operator is
+	about to look at, and its category is what a report groups it under.
+	"""
+	mp = _marketplace(marketplace, connection=connection)
+	filters = {"marketplace": mp.name, "catalog_synced_at": ["is", "set"]}
+	if older_than_days:
+		filters["catalog_synced_at"] = ["<", add_days(now_datetime(), -cint(older_than_days))]
+	if missing_field:
+		filters[missing_field] = ["is", "not set"]
+
+	names = frappe.get_all("Amazon Product Listing", filters=filters, pluck="name")
+	for name in names:
+		frappe.db.set_value(
+			"Amazon Product Listing", name, "catalog_synced_at", None, update_modified=False
+		)
+	frappe.db.commit()
+	return {"marketplace": mp.name, "marked_stale": len(names)}
 
 
 def _needs_enrichment(mp, rows):
@@ -219,6 +257,7 @@ def _apply_catalog(doc, mp, catalog_content):
 		return
 	_apply_content(doc, mp, {}, {}, catalog_content=catalog_content)
 	_apply_variation(doc, catalog_content)
+	_apply_catalog_facts(doc, catalog_content)
 	doc.catalog_synced_at = now_datetime()
 
 

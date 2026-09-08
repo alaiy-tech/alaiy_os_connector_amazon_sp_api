@@ -29,27 +29,7 @@ TZ = "America/New_York"
 
 
 class TestAmazonOrderMapping(UnitTestCase):
-	# --- time -----------------------------------------------------------
-	def test_to_amazon_iso_converts_system_time_to_utc(self):
-		with patch.object(orders, "get_system_timezone", return_value=TZ):
-			# 09:15 EDT is 13:15Z
-			self.assertEqual(orders._to_amazon_iso("2026-08-03 09:15:00"), "2026-08-03T13:15:00Z")
-
-	def test_from_amazon_iso_converts_utc_to_system_time(self):
-		with patch.object(orders, "get_system_timezone", return_value=TZ):
-			self.assertEqual(str(orders._from_amazon_iso("2026-08-03T13:15:00Z")), "2026-08-03 09:15:00")
-
-	def test_iso_round_trip_is_lossless(self):
-		with patch.object(orders, "get_system_timezone", return_value=TZ):
-			out = orders._from_amazon_iso(orders._to_amazon_iso("2026-01-15 23:59:00"))
-			self.assertEqual(str(out), "2026-01-15 23:59:00")
-
-	def test_from_amazon_iso_tolerates_missing_and_malformed(self):
-		# Pending orders routinely omit ship dates; a parse failure must not
-		# take the whole run down.
-		self.assertIsNone(orders._from_amazon_iso(None))
-		self.assertIsNone(orders._from_amazon_iso(""))
-		self.assertIsNone(orders._from_amazon_iso("not-a-date"))
+	# Time conversion moved with the code, to tests/test_times.py.
 
 	# --- money ----------------------------------------------------------
 	def test_money_reads_amount(self):

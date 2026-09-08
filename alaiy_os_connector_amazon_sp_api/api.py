@@ -29,6 +29,7 @@ from urllib.parse import quote
 
 import frappe
 from frappe import _
+from frappe.utils import cint
 
 from alaiy_os_connector_amazon_sp_api import connections
 
@@ -36,6 +37,7 @@ from alaiy_os_connector_amazon_sp_api import app_config as config
 from alaiy_os_connector_amazon_sp_api import csv_export, links, oauth, sales
 from alaiy_os_connector_amazon_sp_api.spapi import (
 	health,
+	inventory,
 	listings,
 	product_types,
 	reconcile,
@@ -245,6 +247,63 @@ def get_health_summary(marketplace=None, connection=None):
 		"feedback": feedback,
 		"synced_at": synced_at,
 	}
+
+
+# --- FBA inventory -----------------------------------------------------------
+@frappe.whitelist()
+def sync_fba_inventory(marketplace=None, connection=None):
+	"""On-demand FBA stock refresh for a marketplace (defaults to primary)."""
+	_require_manager()
+	conn = connections.resolve(connection)
+	if not conn.is_connected():
+		frappe.throw(_("Amazon account is not connected. Connect it first."))
+	return inventory.sync_inventory(connection=conn, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def get_fba_inventory(marketplace=None, connection=None, sku=None, limit=200):
+	"""Stored FBA stock rows for one seller, lowest fulfillable first.
+
+	Scoped to the resolved connection and not only to the marketplace. That is
+	deliberate and worth stating, because `get_health_summary` above does the
+	opposite: it filters `Account Health Metric` on marketplace alone, and on a
+	bench with two sellers in the same marketplace that reads the other seller's
+	numbers. Stock rows carry the connection precisely so this read cannot.
+
+	Sorted by what is sellable today rather than by Amazon's `total_qty`, which
+	includes inbound and unfulfillable units — see spapi/inventory.py.
+	"""
+	conn = connections.resolve(connection)
+	filters = {"connection": conn.name}
+
+	marketplace = marketplace or conn.primary_marketplace
+	if marketplace:
+		marketplace_id = frappe.db.get_value("Amazon Marketplace", marketplace, "marketplace_id")
+		filters["marketplace"] = marketplace_id or marketplace
+	if sku:
+		filters["seller_sku"] = sku
+
+	return frappe.get_all(
+		"Amazon FBA Inventory",
+		filters=filters,
+		fields=[
+			"seller_sku",
+			"asin",
+			"fnsku",
+			"condition",
+			"product_name",
+			"fulfillable_qty",
+			"inbound_qty",
+			"reserved_qty",
+			"unfulfillable_qty",
+			"researching_qty",
+			"total_qty",
+			"amazon_updated_at",
+			"synced_at",
+		],
+		order_by="fulfillable_qty asc, seller_sku asc",
+		limit_page_length=cint(limit) or 200,
+	)
 
 
 # --- listings (Phase 2) ------------------------------------------------------
@@ -460,7 +519,7 @@ def _as_list(value):
 # correctable; minting a public ASIN is not, so it is asked for one row at a
 # time rather than reachable from a bulk selection. See spapi.listings.create_asin.
 @frappe.whitelist()
-def preview_asin_creation(sku, marketplace=None):
+def preview_asin_creation(sku, marketplace=None, connection=None):
 	"""What creating this product on Amazon would submit. Read-only.
 
 	Returns {ready, blockers, warnings, attributes, required, ...}. `blockers` is
@@ -468,7 +527,7 @@ def preview_asin_creation(sku, marketplace=None):
 	where — and `attributes` is the payload a ready row would send.
 	"""
 	_require_manager()
-	return listings.preview_asin_creation(sku, marketplace=marketplace)
+	return listings.preview_asin_creation(sku, marketplace=marketplace, connection=connection)
 
 
 @frappe.whitelist(methods=["POST"])

@@ -1,0 +1,225 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-09-08 00:00:00.000000",
+ "description": "FBA stock for one seller SKU in one marketplace, from the FBA Inventory API. Upserted on sync; unique on (connection, marketplace, seller_sku).",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "connection",
+  "marketplace",
+  "column_break_ident",
+  "seller_sku",
+  "asin",
+  "fnsku",
+  "condition",
+  "product_name",
+  "quantities_section",
+  "fulfillable_qty",
+  "reserved_qty",
+  "unfulfillable_qty",
+  "researching_qty",
+  "column_break_inbound",
+  "inbound_qty",
+  "inbound_working_qty",
+  "inbound_shipped_qty",
+  "inbound_receiving_qty",
+  "total_qty",
+  "sync_section",
+  "amazon_updated_at",
+  "column_break_sync",
+  "synced_at",
+  "row_key"
+ ],
+ "fields": [
+  {
+   "fieldname": "connection",
+   "fieldtype": "Link",
+   "label": "Connection",
+   "options": "Amazon Connection",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
+   "description": "Which seller's stock this is. Part of the row key, so two sellers with the same SKU on one bench keep separate rows."
+  },
+  {
+   "fieldname": "marketplace",
+   "fieldtype": "Link",
+   "label": "Marketplace",
+   "options": "Amazon Marketplace",
+   "reqd": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_ident",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "seller_sku",
+   "fieldtype": "Data",
+   "label": "Seller SKU",
+   "reqd": 1,
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "asin",
+   "fieldtype": "Data",
+   "label": "ASIN",
+   "search_index": 1
+  },
+  {
+   "fieldname": "fnsku",
+   "fieldtype": "Data",
+   "label": "FNSKU"
+  },
+  {
+   "fieldname": "condition",
+   "fieldtype": "Data",
+   "label": "Condition"
+  },
+  {
+   "fieldname": "product_name",
+   "fieldtype": "Small Text",
+   "label": "Product Name"
+  },
+  {
+   "fieldname": "quantities_section",
+   "fieldtype": "Section Break",
+   "label": "Quantities"
+  },
+  {
+   "fieldname": "fulfillable_qty",
+   "fieldtype": "Int",
+   "label": "Fulfillable",
+   "in_list_view": 1,
+   "description": "In a fulfilment centre and sellable today. The only figure that is stock for a reorder decision — see spapi/inventory.py."
+  },
+  {
+   "fieldname": "reserved_qty",
+   "fieldtype": "Int",
+   "label": "Reserved",
+   "description": "Physically present, already allocated to placed orders."
+  },
+  {
+   "fieldname": "unfulfillable_qty",
+   "fieldtype": "Int",
+   "label": "Unfulfillable",
+   "description": "Damaged, expired or otherwise never sellable again. Counted in Total, never in cover."
+  },
+  {
+   "fieldname": "researching_qty",
+   "fieldtype": "Int",
+   "label": "Researching",
+   "description": "Amazon has lost track of these and is looking for them."
+  },
+  {
+   "fieldname": "column_break_inbound",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "inbound_qty",
+   "fieldtype": "Int",
+   "label": "Inbound (total)",
+   "in_list_view": 1,
+   "description": "Working + shipped + receiving. Bought, not yet sellable: counting it as cover is how a seller stocks out while the dashboard still shows days in hand."
+  },
+  {
+   "fieldname": "inbound_working_qty",
+   "fieldtype": "Int",
+   "label": "Inbound Working"
+  },
+  {
+   "fieldname": "inbound_shipped_qty",
+   "fieldtype": "Int",
+   "label": "Inbound Shipped"
+  },
+  {
+   "fieldname": "inbound_receiving_qty",
+   "fieldtype": "Int",
+   "label": "Inbound Receiving"
+  },
+  {
+   "fieldname": "total_qty",
+   "fieldtype": "Int",
+   "label": "Total (Amazon's)",
+   "description": "Amazon's own sum across every bucket above, including unfulfillable. Reported as given; not an answer to 'how much do I have'."
+  },
+  {
+   "fieldname": "sync_section",
+   "fieldtype": "Section Break",
+   "label": "Sync"
+  },
+  {
+   "fieldname": "amazon_updated_at",
+   "fieldtype": "Datetime",
+   "label": "Amazon Last Updated",
+   "read_only": 1,
+   "description": "When Amazon last touched this summary, in site time."
+  },
+  {
+   "fieldname": "column_break_sync",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "synced_at",
+   "fieldtype": "Datetime",
+   "label": "Synced At",
+   "read_only": 1,
+   "description": "When we last read it. A SKU that has left FBA keeps its final row, and this is what says the figure is stale."
+  },
+  {
+   "fieldname": "row_key",
+   "fieldtype": "Data",
+   "label": "Row Key",
+   "unique": 1,
+   "read_only": 1,
+   "hidden": 1,
+   "description": "connection::marketplace::seller_sku — what makes a stock row unique."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-08 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Alaiy Os Connector Amazon Sp Api",
+ "name": "Amazon FBA Inventory",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Amazon Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Amazon Viewer"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
