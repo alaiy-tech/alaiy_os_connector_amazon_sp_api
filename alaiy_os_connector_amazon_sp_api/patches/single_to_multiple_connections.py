@@ -73,11 +73,12 @@ def execute():
 	# The token is re-keyed below rather than re-encrypted through the document,
 	# so make sure the insert does not write a masked placeholder over it.
 	doc.refresh_token = None
-	_drop_dangling_links(doc)
 	doc.flags.ignore_permissions = True
 	doc.flags.ignore_mandatory = True
-	doc.insert(ignore_permissions=True)
+	# ignore_links, and the sweep after — see _drop_dangling_links.
+	doc.insert(ignore_permissions=True, ignore_links=True)
 
+	_drop_dangling_links(doc)
 	_move_password(doc.name)
 
 	frappe.db.delete("Singles", {"doctype": DOCTYPE})
@@ -96,17 +97,32 @@ def _drop_dangling_links(doc) -> None:
 	this site has never had:
 
 	  * a row in tabSingles, written while the record still existed;
-	  * a field default, which `new_doc` applies to every field — including the
-	    ones the Single never stored. `orders_selling_price_list` defaults to
-	    "Standard Selling", a Price List that only exists on a site whose
-	    ERPNext setup wizard created it.
+	  * a field default. `orders_selling_price_list` defaults to
+	    "Standard Selling", a Price List that exists only on a site whose
+	    ERPNext setup wizard created it, and the default lands on the document
+	    whether or not the Single ever stored that field.
 
-	Either one makes `_validate_links` throw, and a throw here takes the whole
-	`bench migrate` — and with it the deploy — down, before the refresh token has
-	been re-keyed. A dangling link is not worth that: every one of these fields
-	is optional to the connector (`spapi.orders` falls back to "Standard Selling"
-	when the price list is empty), so drop the value, name it in the log, and let
-	the seller re-pick it in the UI.
+	Left to `_validate_links`, either one throws, and a throw here takes the
+	whole `bench migrate` — and with it the deploy — down at the insert, which
+	is before the refresh token has been re-keyed: no connection row, and a
+	token still keyed to the Single.
+
+	Hence `ignore_links` on the insert and this sweep *after* it. Clearing the
+	values beforehand cannot work: `Document.insert` calls `_set_defaults` four
+	lines before `_validate_links`, and that re-applies every doctype default to
+	whatever field is empty — including the one just cleared. Anything dropped
+	before the insert is put back before the links are checked.
+
+	So the correction has to come after the row exists, and it is a direct write
+	rather than a save, because a save would run the same defaulting again. It
+	lands in the transaction this patch commits, so the dangling value is never
+	visible to anything outside it.
+
+	Dropping rather than keeping: every one of these fields is optional to the
+	connector (`spapi.orders` falls back to "Standard Selling" when the price
+	list is empty), so a seller re-picking a warehouse is a far smaller thing
+	than a deploy that cannot proceed. It is logged all the same — a setting
+	going quietly empty is worth a line.
 	"""
 	for df in doc.meta.get_link_fields():
 		value = doc.get(df.fieldname)
@@ -114,8 +130,9 @@ def _drop_dangling_links(doc) -> None:
 			continue
 
 		doc.set(df.fieldname, None)
+		frappe.db.set_value(DOCTYPE, doc.name, df.fieldname, None, update_modified=False)
 		frappe.logger().warning(
-			f"Amazon connector: dropping {DOCTYPE}.{df.fieldname} = {value!r} — "
+			f"Amazon connector: dropped {DOCTYPE}.{df.fieldname} = {value!r} — "
 			f"no such {df.options} on this site"
 		)
 
