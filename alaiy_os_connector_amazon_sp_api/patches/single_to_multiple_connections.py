@@ -73,6 +73,7 @@ def execute():
 	# The token is re-keyed below rather than re-encrypted through the document,
 	# so make sure the insert does not write a masked placeholder over it.
 	doc.refresh_token = None
+	_drop_dangling_links(doc)
 	doc.flags.ignore_permissions = True
 	doc.flags.ignore_mandatory = True
 	doc.insert(ignore_permissions=True)
@@ -85,6 +86,38 @@ def execute():
 	frappe.logger().info(
 		f"Amazon connector: migrated the Single connection to {DOCTYPE} {doc.name}"
 	)
+
+
+def _drop_dangling_links(doc) -> None:
+	"""
+	Clear Link values whose target does not exist on this site.
+
+	Two things put a name in a Link field here, and either can name a record
+	this site has never had:
+
+	  * a row in tabSingles, written while the record still existed;
+	  * a field default, which `new_doc` applies to every field — including the
+	    ones the Single never stored. `orders_selling_price_list` defaults to
+	    "Standard Selling", a Price List that only exists on a site whose
+	    ERPNext setup wizard created it.
+
+	Either one makes `_validate_links` throw, and a throw here takes the whole
+	`bench migrate` — and with it the deploy — down, before the refresh token has
+	been re-keyed. A dangling link is not worth that: every one of these fields
+	is optional to the connector (`spapi.orders` falls back to "Standard Selling"
+	when the price list is empty), so drop the value, name it in the log, and let
+	the seller re-pick it in the UI.
+	"""
+	for df in doc.meta.get_link_fields():
+		value = doc.get(df.fieldname)
+		if not value or frappe.db.exists(df.options, value):
+			continue
+
+		doc.set(df.fieldname, None)
+		frappe.logger().warning(
+			f"Amazon connector: dropping {DOCTYPE}.{df.fieldname} = {value!r} — "
+			f"no such {df.options} on this site"
+		)
 
 
 def _move_password(new_name: str) -> None:
