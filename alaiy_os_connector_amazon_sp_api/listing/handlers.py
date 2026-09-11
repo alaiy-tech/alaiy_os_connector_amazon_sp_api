@@ -317,6 +317,17 @@ def get_product(sku):
 	reported, never looked up: classification runs on the enriched title at save
 	time, for every listing, because the product type has to match the copy that
 	will actually be published (see product_type.py).
+
+	`brand` is reported for the opposite reason to `product_type`: it is an INPUT to
+	the copy, not a consequence of it. An Amazon title opens with the brand name
+	(`Brand Keyword | Type / Material | …`), so a run that learns the brand only at
+	save time has already written a title built on a different one. A row whose brand
+	was assigned when it was drafted — a product sourced from a supplier and put on
+	the register by `draft_listing` — is therefore telling the model which brand to
+	write under, and `_save_brand` holds it to that. A row synced from Amazon carries
+	Amazon's own brand here instead, which is equally the right thing to write under:
+	brand is set when the ASIN is created and Amazon will not take it as an offer
+	update, so the published brand is not the enrichment's to change either way.
 	"""
 	listing = get_listing(sku)
 
@@ -324,6 +335,7 @@ def get_product(sku):
 		"sku": listing.name,
 		"title": listing.get("title"),
 		"asin": listing.get("asin"),
+		"brand": listing.get("brand"),
 		"item_code": listing.get("product"),
 		"marketplace": listing.get("marketplace"),
 		"product_type": product_types.existing(listing),
@@ -535,8 +547,8 @@ def _save_product_type(doc, source_listing):
 	doc.needs_review = "\n".join(filter(None, [doc.needs_review, flag]))
 
 
-def _save_brand(doc, listing):
-	"""Assign the house brand the model decided this product belongs under.
+def _save_brand(doc, listing, source_listing=None):
+	"""Assign the house brand this product sells under.
 
 	Lives on this enrichment record only -- see `_push_to_listing` in
 	amazon_enriched_listing.py, which deliberately never writes it to the
@@ -552,12 +564,48 @@ def _save_brand(doc, listing):
 	(`brand.is_configured()`) -- a deployment with none registered has nothing
 	to say about brand, and nagging every listing about a field that
 	deployment doesn't use would train reviewers to ignore the flag.
+
+	**An assigned brand on the register row wins.** The paragraph above still
+	describes every row that arrives without one, which is every row synced from
+	Amazon that Amazon holds no brand for. But a row drafted by a sourcing flow --
+	`draft_listing` takes a brand, and a batch pulled from one supplier category is
+	pulled *because* it belongs to a house brand -- already carries the answer, and
+	the answer is the caller's to give rather than the model's to guess. The
+	classifier is not consulted for those rows: `get_product` reported the brand, the
+	prompt told the model to write under it, and holding the saved field to the same
+	value is what stops a title opening with one brand and the record naming another.
+
+	It is also the value that reaches Amazon. `_catalog_attributes` sends
+	`row.get("brand")` when the ASIN is created, and `_identifier_attributes` reads it
+	again to claim a GTIN exemption -- so on a new ASIN the brand assigned here is
+	published, permanently, and Amazon will not accept it as a later offer update.
+	That is the whole reason forcing it is worth the coupling.
+
+	The model's own pick is kept either way: `output_json` holds the raw enrichment,
+	and a disagreement is flagged for the reviewer rather than silently discarded.
 	"""
 	valid = brands.valid_brands()
 	if not valid:
 		return
 
 	candidate = (listing.get("brand") or "").strip()
+	assigned = ((source_listing or {}).get("brand") or "").strip()
+
+	if assigned in valid:
+		doc.brand = assigned
+		if candidate and candidate != assigned:
+			doc.needs_review = "\n".join(
+				filter(
+					None,
+					[
+						doc.needs_review,
+						f"Brand (this listing is assigned to '{assigned}', but the copy was "
+						f"classified as '{candidate}' -- check the title opens with '{assigned}')",
+					],
+				)
+			)
+		return
+
 	doc.brand = candidate if candidate in valid else None
 	if not doc.brand:
 		doc.needs_review = "\n".join(
@@ -621,7 +669,7 @@ def save_listing(listing, sku=None):
 
 	source_listing = get_listing(sku)
 	_save_product_type(doc, source_listing)
-	_save_brand(doc, listing)
+	_save_brand(doc, listing, source_listing)
 
 	# the ordered content -> pretty JSON; whole payload kept verbatim for audit
 	doc.bullets_json = frappe.as_json(listing.get("bullet_points") or [])
