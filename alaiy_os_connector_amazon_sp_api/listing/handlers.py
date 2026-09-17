@@ -29,7 +29,12 @@ save_listing persists the finished enrichment into the Amazon Enriched Listing
 DocType in "Needs Review" status, for the admin to edit and approve.
 """
 
+import mimetypes
+from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
+
 import frappe
+from frappe.utils.file_manager import save_file
 
 from alaiy_os_connector_amazon_sp_api.listing import brand as brands
 from alaiy_os_connector_amazon_sp_api.listing import product_type as product_types
@@ -237,6 +242,190 @@ def resolve_image_plan(listing):
 		)
 
 	return image_plan(main=main, gallery=family, main_fallback=fallback)
+
+
+# ── the image step: translate the gallery ─────────────────────────────────────
+# There is no background extraction on this site's AI client yet (only
+# `translate_image`), so every photo -- main image included -- goes through
+# translation rather than a white-background composite. A translated main image
+# is flagged in `needs_review` rather than silently shipped as compliant, since
+# Amazon requires the main tile on a plain white background.
+
+# How many photos are translated at once. Paid third-party calls, in parallel,
+# capped so a listing with a big gallery does not fire them all simultaneously.
+_TRANSLATE_CONCURRENCY = 4
+
+_REUSED_NOTE = "Processed on an earlier run; reused rather than paid for again."
+_NO_EXTRACT_NOTE = (
+	"Background extraction is not available on this site, so this main image was "
+	"only translated. Amazon requires the main image on a plain white background -- "
+	"replace it before publishing."
+)
+
+
+def _already_translated(sku):
+	"""{(source_url, role): url} for photos an earlier run already produced.
+
+	Keyed on role as well as url: the same supplier photo used as the main image
+	and as a gallery image is two different results, and reusing one for the
+	other would misrepresent what was actually done to it.
+	"""
+	if not sku or not frappe.db.exists(ENRICHED_DOCTYPE, sku):
+		return {}
+	rows = frappe.get_all(
+		"Amazon Enriched Listing Image",
+		filters={"parent": sku, "parenttype": ENRICHED_DOCTYPE},
+		fields=["source_url", "role", "url"],
+	)
+	return {
+		(row.source_url, row.role or "gallery"): row.url
+		for row in rows
+		if row.source_url and row.url
+	}
+
+
+def _translate_one(client, public_url):
+	"""One photo, off the main thread. Returns (content, media_type, error).
+
+	Only network calls happen here: `translate_image` (thread-safe by the client's
+	own contract) and fetching the result's bytes ourselves, both plain `requests`
+	calls with no Frappe binding. `public_url` must already be resolved -- a local
+	File path needs `frappe.utils.get_url`, which reads site config that is not
+	available inside a worker thread, so `images.public_image_url` is called on
+	the main thread before the pool starts. Saving a File needs the same request
+	context, so that also happens back on the main thread once every photo in the
+	batch has come back. The provider's own url is never returned to the caller --
+	its docstring says it may expire.
+	"""
+	try:
+		result = client.translate_image(public_url)
+		translated_url = result.get("translated_url") or result.get("url") or result.get("image_url")
+		if not translated_url:
+			return None, None, "the translation service returned no url"
+		content, mime = images.fetch_image_bytes(translated_url)
+		return content, mime, None
+	except Exception as exc:
+		return None, None, str(exc)
+
+
+def _rehost(sku, role, content, mime):
+	"""Save a translated photo as a public File, so its url outlives the provider's.
+
+	Must run on the main thread -- see `_translate_one`. Not attached to the
+	Amazon Enriched Listing doctype/name (`dt`/`dn` left blank): the enriched
+	listing may not exist yet the first time this runs, since `save_listing`
+	hasn't been called yet in the same agent turn.
+	"""
+	ext = mimetypes.guess_extension(mime) or ".jpg"
+	file_name = f"listing-{sku or 'url'}-{role}-{uuid4().hex}{ext}"
+	return save_file(file_name, content, None, None, is_private=0).file_url
+
+
+def prepare_images(product, enabled, image_urls=None):
+	"""Translate a listing's photos for Amazon -- the channel's `prepare_images` step.
+
+	`product` is the seller sku; `enabled` is the per-request opt-in toggle,
+	relayed verbatim by the shared listing agent's `prepare_images` tool.
+	`image_urls` only applies to a URL-only product with no listing record.
+
+	Returns {"images": [{role, kind, source_url, url, note}, ...], "note": str}.
+	The FIRST entry is always the main image, the rest are the family gallery in
+	order -- see `resolve_image_plan`. This runs synchronously, inside the
+	already-queued listing-agent job (`execute_agent` enqueues the whole run), so
+	there is no separate background stage: whatever this returns is final.
+	"""
+	if product and frappe.db.exists(LISTING_DOCTYPE, product):
+		plan = resolve_image_plan(get_listing(product))
+	else:
+		urls = [u for u in (image_urls or []) if u]
+		plan = image_plan(main=urls[0] if urls else None, gallery=urls[1:])
+
+	if not plan["targets"]:
+		return {
+			"images": [],
+			"note": (
+				"This listing has no photos, so nothing was prepared -- this step only "
+				"ever processes an existing photograph, and never creates product "
+				"imagery from scratch."
+			),
+		}
+
+	if not enabled:
+		return {
+			"images": [],
+			"note": (
+				"The listing has photos, but the prepare_images toggle is off, so no "
+				"images were processed."
+			),
+		}
+
+	from alaiy_os.engine import llm
+
+	client = llm.image_client()
+	if not client.image_support().get("translate"):
+		frappe.throw(
+			"Image preparation is not available on this site (the active AI client "
+			"cannot translate images). Do NOT retry; return each image with url=null "
+			"so the team can prepare them manually."
+		)
+
+	done = _already_translated(product)
+	targets = [dict(t, url=done.get((t["source_url"], t["role"]))) for t in plan["targets"]]
+	todo = [t for t in targets if not t["url"]]
+
+	fresh = {}
+	if todo:
+		# Resolved here, on the main thread -- see `_translate_one`.
+		public_urls = [images.public_image_url(t["source_url"]) for t in todo]
+		with ThreadPoolExecutor(max_workers=min(_TRANSLATE_CONCURRENCY, len(todo))) as pool:
+			outcomes = list(pool.map(lambda u: _translate_one(client, u), public_urls))
+		for target, (content, mime, error) in zip(todo, outcomes, strict=True):
+			key = (target["source_url"], target["role"])
+			if error:
+				fresh[key] = (None, f"Image preparation failed: {error}"[:200])
+				continue
+			# Back on the main thread: saving a File needs Frappe's request context.
+			fresh[key] = (_rehost(product, target["role"], content, mime), None)
+
+	# Every target is either freshly translated above (`todo`) or already had a
+	# url from an earlier run (`done`) — `plan["targets"]` has no third case.
+	images_out = []
+	for target in targets:
+		key = (target["source_url"], target["role"])
+		if key in fresh:
+			url, note = fresh[key]
+			if not note and target["role"] == "main":
+				note = _NO_EXTRACT_NOTE
+		else:
+			url, note = target["url"], _REUSED_NOTE
+		images_out.append({
+			"role": target["role"],
+			"kind": "translated",
+			"source_url": target["source_url"],
+			"url": url,
+			"note": note,
+		})
+
+	notes = [
+		"The FIRST entry is the main image and the rest are the gallery, in order. "
+		"Copy them verbatim, in this order, with each entry's `role`."
+	]
+	if plan.get("main_fallback"):
+		notes.append(
+			"This variant has no dedicated variant image, so the family's first photo "
+			"was used as the main image. Add 'Main image (no variant photo)' to "
+			"needs_review and say so in notes."
+		)
+	notes.append(
+		"Background extraction is unavailable on this site, so the main image was "
+		"translated rather than placed on a white background. Add 'Main image "
+		"background' to needs_review and say so in notes."
+	)
+	failed = sum(1 for img in images_out if not img["url"])
+	if failed:
+		notes.append(f"{failed} photo(s) failed to process and were left with url=null.")
+
+	return {"images": images_out, "note": " ".join(notes)}
 
 
 def get_listing(sku):
@@ -721,18 +910,18 @@ def save_listing(listing, sku=None):
 			"note": img.get("note"),
 		})
 
-	# There is no image step on this channel yet — the producing side has not moved
-	# across from the retired agent pack — so `images` arrives empty and this lands
-	# on "Not Required" every time. The other two branches are kept rather than
-	# deleted because they are the contract the step will slot back into: a row with
-	# no url is one it queued and will render in the background, and one that
-	# already has a url was reused from an earlier run. Recomputed on every save.
-	if any(not row.url for row in doc.images):
-		doc.image_status = "Queued"
-	elif doc.images:
-		doc.image_status = "Ready"
-	else:
+	# `images` is empty when prepare_images was off or the listing had no photos,
+	# which lands on "Not Required". Processing is synchronous now — nothing is
+	# left to run in the background — so a row with no url is a photo that failed
+	# to translate this run, not one still queued. Recomputed on every save.
+	if not doc.images:
 		doc.image_status = "Not Required"
+	elif all(row.url for row in doc.images):
+		doc.image_status = "Ready"
+	elif any(row.url for row in doc.images):
+		doc.image_status = "Partial"
+	else:
+		doc.image_status = "Failed"
 	doc.image_error = None
 
 	# Permission-checked, deliberately. This runs as whoever asked for the
