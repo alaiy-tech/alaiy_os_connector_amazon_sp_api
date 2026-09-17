@@ -10,20 +10,11 @@ one.
 
 ## Reading only
 
-This is the half of the old agent pack's image plumbing that **enrichment** needs.
-The other half — producing images (the white-background main tile, the translated
-gallery), storing them in S3, and rendering them on a background queue — has not
-moved yet, and neither has the `prepare_images` step that drives it. So the
-`listing_channels` adapter declares no image handler, `get_channel_spec` reports
-`has_image_step: false`, and the agent sets `images: []` and says so in its notes.
-That is a supported state, not a broken one.
-
-What that costs today: a photo an *earlier* run produced and stored in S3 cannot
-be read back here, because resolving one needs the store's own credentials. Source
-photos are unaffected — they are ordinary CDN URLs on the listing, or Frappe
-Files — and those are what enrichment actually reads. When the producing side
-moves across, `image_store` comes with it and the S3 branch is restored to
-`image_block_from_url` and `reference_source`.
+This is the half of the old agent pack's image plumbing that **enrichment** needs
+— turning a photo already on the listing into something the model can look at.
+Producing images (`prepare_images`, the translated gallery) is `handlers.py`;
+what it produces is stored wherever `translate_image` hands back a URL, not
+through this module.
 """
 
 import base64
