@@ -30,15 +30,40 @@ required_apps = ["alaiy_os"]
 # for channels, channels do not look for the agent.
 listing_channels = ["alaiy_os_connector_amazon_sp_api.listing.channel.channel"]
 
+# The Amazon question-answering agent
+# -----------------------------------
+# Same seam, same direction, for a different job. This app used to build that
+# agent itself: agent_export.py (then pack_meta.py) named a model and a turn
+# budget, carried its own prompt, and setup/install.py upserted an OS Agent
+# Registry row on every migrate. None of that was Amazon knowledge. What Amazon
+# can be asked is; which model answers and in what shape is a decision about the
+# product, and three connectors each answering it separately is three prompts
+# drifting apart.
+#
+# So this now exports what only this app knows — a description, the tools, and the
+# Amazon facts that govern how their answers are read — and alaiy_os_agents builds
+# the agent around it. See agent_export.export().
+#
+# Deliberately NOT in required_apps, for the same reason `listing_channels` is
+# not: a site can run this connector with no agent app installed, the hook is
+# simply never read, and what it loses is the ability to be asked questions.
+connector_agents = ["alaiy_os_connector_amazon_sp_api.agent_export.export"]
+
 # Installation
 # ------------
 after_install = "alaiy_os_connector_amazon_sp_api.setup.install.after_install"
 after_migrate = "alaiy_os_connector_amazon_sp_api.setup.install.after_migrate"
 
-# Drop the OS Agent Registry pack on uninstall. Without it the row outlives the app
-# and every one of its handlers stops importing. The OS Connector Registry row is
-# left to the core, which owns that lifecycle; OS Agent Run history is kept on
-# purpose — see setup/install.unregister_agent().
+# Drop this connector's OS Agent Registry row on uninstall. alaiy_os_agents writes
+# that row now, but it cannot clean this case up: its own `registry.unregister`
+# runs when *it* is uninstalled, and its `registry.sync` upserts what the hooks
+# declare without pruning what they stopped declaring. So an uninstall of this app
+# alone would leave the row behind, its handlers no longer importing, advertising
+# an app that is gone — which is the state the row's own migrate check flags and
+# nothing removes.
+#
+# The connector's own OS Connector Registry row is left to the core, which owns
+# that lifecycle; OS Agent Run history is kept on purpose either way.
 before_uninstall = "alaiy_os_connector_amazon_sp_api.setup.install.unregister_agent"
 
 # AlaiyOS integration
