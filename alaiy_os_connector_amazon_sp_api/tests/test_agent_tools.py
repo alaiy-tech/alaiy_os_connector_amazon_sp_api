@@ -4,11 +4,15 @@
 
 Three things here, and they fail for three different reasons.
 
-The manifest test is the cheap one that matters most. `pack_meta.TOOLS` is prose
+The manifest test is the cheap one that matters most. `agent_export.TOOLS` is prose
 plus dotted paths, and nothing type-checks either: a renamed endpoint leaves a row
 whose handler imports at migrate time and throws at run time, which surfaces as an
 agent that answers "that tool could not be imported" to a person who asked about
 their listings. Resolving every handler here catches it in the repo instead.
+
+Since the agent moved to `alaiy_os_agents`, the export is also a contract with
+another app: it has to carry everything that app needs and nothing it decides for
+itself. `TestExport` is that contract.
 
 The CSV tests pin the envelope heuristic. `_rows_from` has to tell a *wrapper*
 around a list of rows from a *record* that happens to contain one, with no schema
@@ -21,17 +25,16 @@ The link tests cover only what needs no site — a hand-made marketplace row wit
 """
 
 import inspect
-import json
 
 import frappe
 from frappe.tests import UnitTestCase
 
-from alaiy_os_connector_amazon_sp_api import csv_export, links, pack_meta
+from alaiy_os_connector_amazon_sp_api import agent_export, csv_export, links
 
 
 class TestPackManifest(UnitTestCase):
 	def test_every_handler_resolves(self):
-		for tool in pack_meta.TOOLS:
+		for tool in agent_export.TOOLS:
 			with self.subTest(tool=tool["tool_id"]):
 				self.assertTrue(callable(frappe.get_attr(tool["handler"])))
 
@@ -42,25 +45,27 @@ class TestPackManifest(UnitTestCase):
 		accept is not a mis-hint the model can recover from — it is the call
 		failing.
 		"""
-		for tool in pack_meta.TOOLS:
+		for tool in agent_export.TOOLS:
 			handler = frappe.get_attr(tool["handler"])
 			accepted = set(inspect.signature(handler).parameters)
 			declared = set(tool["parameters_schema"].get("properties", {}))
 			with self.subTest(tool=tool["tool_id"]):
 				self.assertEqual(declared - accepted, set())
 
-	def test_registry_rows_carry_json_and_the_connector(self):
-		for tool in pack_meta.TOOLS:
-			row = pack_meta.as_registry_tool(tool)
-			with self.subTest(tool=row["tool_id"]):
-				self.assertEqual(row["connector"], pack_meta.CONNECTOR_ID)
-				self.assertEqual(json.loads(row["parameters_schema"])["type"], "object")
-				if row["required_permissions"]:
-					for perm in json.loads(row["required_permissions"]):
-						self.assertEqual(set(perm), {"doctype", "ptype"})
+	def test_exported_tools_carry_the_connector_and_a_usable_schema(self):
+		for tool in agent_export.export()["tools"]:
+			with self.subTest(tool=tool["tool_id"]):
+				# The gate that makes factory.py refuse the whole agent while this
+				# connector is disabled.
+				self.assertEqual(tool["connector"], agent_export.CONNECTOR_ID)
+				# Dicts, not JSON text: alaiy_os_agents serialises on the way to the
+				# child row, and two files with an opinion on that is one too many.
+				self.assertEqual(tool["parameters_schema"]["type"], "object")
+				for perm in tool["required_permissions"] or []:
+					self.assertEqual(set(perm), {"doctype", "ptype"})
 
 	def test_tool_ids_are_unique(self):
-		ids = [tool["tool_id"] for tool in pack_meta.TOOLS]
+		ids = [tool["tool_id"] for tool in agent_export.TOOLS]
 		self.assertEqual(len(ids), len(set(ids)))
 
 	def test_the_two_fulfilment_vocabularies_never_share_a_parameter_name(self):
@@ -70,7 +75,7 @@ class TestPackManifest(UnitTestCase):
 		the next, so the names are kept apart and this is what holds them there.
 		"""
 		seen = {}
-		for tool in pack_meta.TOOLS:
+		for tool in agent_export.TOOLS:
 			for name, spec in tool["parameters_schema"].get("properties", {}).items():
 				if "fulfillment" not in name or "enum" not in spec:
 					continue
@@ -78,6 +83,49 @@ class TestPackManifest(UnitTestCase):
 				self.assertEqual(seen.setdefault(name, values), values, f"{tool['tool_id']}.{name}")
 		self.assertEqual(seen.get("fulfillment_channel"), ("DEFAULT", "AMAZON"))
 		self.assertEqual(seen.get("fulfillment_network"), ("AFN", "MFN"))
+
+	def test_the_export_carries_what_the_agent_app_needs(self):
+		"""The contract with alaiy_os_agents, in one place.
+
+		A missing key here does not fail loudly: `meta.build` would raise on the
+		migrate that reads it, naming this app, in someone else's repo.
+		"""
+		export = agent_export.export()
+		self.assertEqual(
+			set(export), {"agent_id", "label", "icon", "description", "rules", "tools"}
+		)
+		self.assertTrue(export["rules"].strip())
+		self.assertEqual(len(export["tools"]), len(agent_export.TOOLS))
+
+	def test_the_export_decides_nothing_the_agent_app_decides(self):
+		"""The whole point of the move: no model, no turn budget, no prompt shape,
+		no reply contract. A connector setting any of them again is the drift the
+		export exists to stop, and it would silently win — `meta.build` copies what
+		it is given for the keys it does not own."""
+		export = agent_export.export()
+		for owned_elsewhere in (
+			"model",
+			"max_turns",
+			"system_prompt",
+			"output_format",
+			"output_schema",
+			"chat_skill",
+		):
+			self.assertNotIn(owned_elsewhere, export)
+		self.assertFalse(hasattr(agent_export, "MODEL"))
+		self.assertFalse(hasattr(agent_export, "MAX_TURNS"))
+
+	def test_no_schema_offers_a_marketplace(self):
+		"""`marketplace` is a real parameter on most of these endpoints and is
+		deliberately absent from every schema: there is no tool here that lists
+		marketplaces, so a model asked for one invents an Amazon marketplace id.
+		Omitted, every call falls through to the connection's primary marketplace.
+		"""
+		for tool in agent_export.TOOLS:
+			with self.subTest(tool=tool["tool_id"]):
+				self.assertNotIn(
+					"marketplace", tool["parameters_schema"].get("properties", {})
+				)
 
 	def test_every_sales_read_declares_the_permission_it_checks(self):
 		"""The local sales reads gate on `Sales Order` read and nothing else, so
@@ -91,7 +139,7 @@ class TestPackManifest(UnitTestCase):
 			"compare_sales_periods",
 			"list_amazon_orders",
 		}
-		by_id = {tool["tool_id"]: tool for tool in pack_meta.TOOLS}
+		by_id = {tool["tool_id"]: tool for tool in agent_export.TOOLS}
 		self.assertEqual(local_reads - set(by_id), set())
 		for tool_id in local_reads:
 			with self.subTest(tool=tool_id):
