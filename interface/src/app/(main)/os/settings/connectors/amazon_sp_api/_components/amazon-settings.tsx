@@ -9,13 +9,14 @@ import { Alert, AlertDescription, AlertTitle } from "@alaiy-os/ui/alert";
 import { Button } from "@alaiy-os/ui/button";
 import { Skeleton } from "@alaiy-os/ui/skeleton";
 import { Spinner } from "@alaiy-os/ui/spinner";
-import { CircleCheck, CircleX } from "lucide-react";
+import { CircleCheck, CircleX, Plug, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { ANY_MARKETPLACE } from "@/components/amazon/marketplace-picker";
 import {
   amazonErrorMessage,
   disconnectAmazon,
+  ensureConnection,
   fetchConfigStatus,
   fetchConnectionStatus,
   fetchConsentUrl,
@@ -30,6 +31,26 @@ import { ConnectionCard, type ConnectionForm } from "./connection-card";
 import { OrderDefaultsCard, type OrdersForm } from "./order-defaults-card";
 
 const CONNECTOR_ID = "amazon_sp_api";
+
+/** No `Amazon Connection` on this site yet — see AmazonConnectionState. */
+const NO_CONNECTION = "no_connection";
+
+/**
+ * Why each of the screen's four reads failed, if it did.
+ *
+ * Kept apart rather than collapsed into one boolean because they fail for
+ * unrelated reasons and only one of them is fatal to the whole screen. This
+ * used to be a single `Promise.all` and a single alert saying the endpoints
+ * "answered nothing usable", which named four causes and distinguished none of
+ * them: a missing role, an unregistered connector, a site with no connection
+ * and a multi-seller site all arrived as the same red card.
+ */
+type LoadFailures = {
+  connection?: string;
+  credentials?: string;
+  fields?: string;
+  orders?: string;
+};
 
 /**
  * Everything this connector needs to run, in the OS.
@@ -68,6 +89,9 @@ export function AmazonSettings() {
     syncFrom: "",
   });
 
+  const [failures, setFailures] = useState<LoadFailures>({});
+  /** The DocType fields are loaded — so saving them writes values, not blanks. */
+  const [fieldsLoaded, setFieldsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -102,27 +126,51 @@ export function AmazonSettings() {
 
     async function load() {
       setLoading(true);
-      try {
-        // The order-sync status is the one read that can legitimately fail on its
-        // own (no ERPNext on the site, so no Sales Order to count), and the rest of
-        // the screen is still worth rendering without it.
-        const [connectionStatus, configStatus, connectorConfig, ordersSync] = await Promise.all([
-          fetchConnectionStatus(),
-          fetchConfigStatus(),
-          fetchConnectorConfig(CONNECTOR_ID),
-          fetchOrdersSyncStatus().catch(() => null),
-        ]);
-        if (cancelled) return;
 
-        setStatus(connectionStatus);
-        setConfig(configStatus);
-        setOrdersStatus(ordersSync);
-        applyValues(connectorConfig);
-      } catch (error) {
-        if (!cancelled) toast.error(amazonErrorMessage(error, "Could not load the Amazon settings."));
-      } finally {
-        if (!cancelled) setLoading(false);
+      // Settled, not all: these four reads are independent, and one of them
+      // throwing is not a reason to render none of the others. The DocType
+      // fields in particular go through the platform's connector API, which can
+      // refuse for reasons that say nothing about whether Amazon is reachable.
+      const [connectionStatus, configStatus, connectorConfig, ordersSync] = await Promise.allSettled([
+        fetchConnectionStatus(),
+        fetchConfigStatus(),
+        fetchConnectorConfig(CONNECTOR_ID),
+        fetchOrdersSyncStatus(),
+      ]);
+      if (cancelled) return;
+
+      const failed: LoadFailures = {};
+
+      if (connectionStatus.status === "fulfilled") setStatus(connectionStatus.value);
+      else {
+        setStatus(null);
+        failed.connection = amazonErrorMessage(connectionStatus.reason, "Could not read the Amazon connection.");
       }
+
+      if (configStatus.status === "fulfilled") setConfig(configStatus.value);
+      else {
+        setConfig(null);
+        failed.credentials = amazonErrorMessage(configStatus.reason, "Could not read the app credentials.");
+      }
+
+      if (connectorConfig.status === "fulfilled") {
+        applyValues(connectorConfig.value);
+        setFieldsLoaded(true);
+      } else {
+        setFieldsLoaded(false);
+        failed.fields = amazonErrorMessage(connectorConfig.reason, "Could not read this connector's settings fields.");
+      }
+
+      // The one read that can legitimately fail on its own: no ERPNext on the
+      // site means no Sales Order to count. Its card copes with a null.
+      if (ordersSync.status === "fulfilled") setOrdersStatus(ordersSync.value);
+      else {
+        setOrdersStatus(null);
+        failed.orders = amazonErrorMessage(ordersSync.reason, "Could not read the order sync status.");
+      }
+
+      setFailures(failed);
+      setLoading(false);
     }
 
     function applyValues(connectorConfig: ConnectorConfig) {
@@ -166,6 +214,14 @@ export function AmazonSettings() {
         orders_fallback_item: orders.fallbackItem || null,
         orders_sync_from: toFrappeDateTime(orders.syncFrom),
       };
+
+      // A bench with no connection has nothing for the platform's save to write
+      // to, and the platform cannot create the first row: `Amazon Connection` is
+      // named `field:connection_id`, which only this app knows. So the first
+      // save is what makes the connection, which is also the only moment it is
+      // unambiguous — with no other seller on the site there is none to confuse
+      // it with.
+      if (status?.status === NO_CONNECTION) await ensureConnection();
 
       const outcome = await saveAndTestConnector(CONNECTOR_ID, values);
 
@@ -257,26 +313,34 @@ export function AmazonSettings() {
     );
   }
 
-  if (!status || !config) {
-    return (
-      <Alert variant="destructive">
-        <CircleX />
-        <AlertTitle>Could not read the Amazon connector</AlertTitle>
-        <AlertDescription>
-          <p>
-            The settings endpoints answered nothing usable. This needs the System Manager or Amazon Manager role, and
-            the connector to be registered in the OS Connector Registry.
-          </p>
-          <Button variant="outline" size="sm" onClick={reload}>
-            Try again
-          </Button>
-        </AlertDescription>
-      </Alert>
-    );
-  }
+  // Each read that failed, said in its own words. A screen where three of the
+  // four worked shows the three and names the one that did not, rather than
+  // replacing all of it with a guess at what went wrong.
+  const failureList = [failures.connection, failures.credentials, failures.fields, failures.orders].filter(
+    (message): message is string => Boolean(message),
+  );
 
   return (
     <div className="flex flex-col gap-4">
+      {failureList.length > 0 && (
+        <Alert variant="destructive">
+          <CircleX />
+          <AlertTitle>
+            {failureList.length === 1 ? "Part of this screen did not load" : "Parts of this screen did not load"}
+          </AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc space-y-1 pl-4">
+              {failureList.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+            </ul>
+            <Button variant="outline" size="sm" onClick={reload}>
+              <RefreshCw /> Try again
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {result && (
         <Alert variant={result.success ? "default" : "destructive"}>
           {result.success ? <CircleCheck /> : <CircleX />}
@@ -285,50 +349,70 @@ export function AmazonSettings() {
         </Alert>
       )}
 
-      <ConnectionCard
-        status={status}
-        form={connection}
-        onChange={(key, value) =>
-          setConnection((current) => ({
-            ...current,
-            // The picker's "not set" choice is a sentinel, not a marketplace.
-            [key]: value === ANY_MARKETPLACE ? "" : value,
-          }))
-        }
-        configReady={config.ready}
-        busy={busy}
-        connecting={connecting}
-        onConnect={() => void connect()}
-        onDisconnect={() => void disconnect()}
-        onTest={() => void test()}
-      />
+      {status?.status === NO_CONNECTION && (
+        <Alert>
+          <Plug />
+          <AlertTitle>No Amazon connection on this site yet</AlertTitle>
+          <AlertDescription>
+            Nothing is stored for this connector. Set the region and marketplace below and save, or connect the account
+            straight away — either one creates the connection this site will use.
+          </AlertDescription>
+        </Alert>
+      )}
 
-      <AppCredentialsCard config={config} origin={origin} />
+      {status && (
+        <ConnectionCard
+          status={status}
+          form={connection}
+          onChange={(key, value) =>
+            setConnection((current) => ({
+              ...current,
+              // The picker's "not set" choice is a sentinel, not a marketplace.
+              [key]: value === ANY_MARKETPLACE ? "" : value,
+            }))
+          }
+          configReady={Boolean(config?.ready)}
+          busy={busy}
+          connecting={connecting}
+          onConnect={() => void connect()}
+          onDisconnect={() => void disconnect()}
+          onTest={() => void test()}
+        />
+      )}
 
-      <OrderDefaultsCard
-        status={ordersStatus}
-        form={orders}
-        onChange={(key, value) => setOrders((current) => ({ ...current, [key]: value }))}
-        busy={busy}
-        syncing={syncingOrders}
-        onSyncNow={() => void syncOrdersNow()}
-        canSync={status.connected && Boolean(ordersStatus?.configured)}
-      />
+      {config && <AppCredentialsCard config={config} origin={origin} />}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={() => void save()} disabled={busy}>
-          {busy ? (
-            <>
-              <Spinner /> Working...
-            </>
-          ) : (
-            "Save and test"
-          )}
-        </Button>
-        <span className="text-muted-foreground text-xs">
-          Saves the region, marketplace and order defaults, then re-runs the connection test.
-        </span>
-      </div>
+      {/* Both of these edit the connector's own DocType fields, so neither is
+          rendered when those did not load: an empty form over real stored values
+          is one Save away from erasing them. */}
+      {fieldsLoaded && (
+        <>
+          <OrderDefaultsCard
+            status={ordersStatus}
+            form={orders}
+            onChange={(key, value) => setOrders((current) => ({ ...current, [key]: value }))}
+            busy={busy}
+            syncing={syncingOrders}
+            onSyncNow={() => void syncOrdersNow()}
+            canSync={Boolean(status?.connected && ordersStatus?.configured)}
+          />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => void save()} disabled={busy}>
+              {busy ? (
+                <>
+                  <Spinner /> Working...
+                </>
+              ) : (
+                "Save and test"
+              )}
+            </Button>
+            <span className="text-muted-foreground text-xs">
+              Saves the region, marketplace and order defaults, then re-runs the connection test.
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

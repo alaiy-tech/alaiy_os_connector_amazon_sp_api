@@ -60,9 +60,55 @@ def _require_manager():
 
 
 # --- connection --------------------------------------------------------------
+def _unconfigured_status():
+	"""The connection status of a bench that has no Amazon Connection at all.
+
+	An answer rather than a throw, and the distinction matters to exactly one
+	caller: the OS settings screen, which is where a connection gets made. It
+	loads the connection status, the app credentials and the connector's DocType
+	fields together, so a throw here took the whole screen down and left the
+	operator on an alert about roles and registry rows — with no way to reach the
+	form that would have fixed it. `resolve()` still refuses for every other
+	caller, because a listing push with nowhere to push to is a bug.
+
+	`no_connection` is its own state on purpose. "Not connected" means a seller
+	who has not authorized yet; this means the site has no seller on it.
+	"""
+	return {
+		"status": "no_connection",
+		"message": _("No Amazon connection has been set up on this site yet."),
+		"connected": False,
+		"selling_partner_id": None,
+		# From site_config and the region defaults — true without a connection,
+		# and what the screen shows beside the Connect button.
+		"region": config.resolve_region(),
+		"endpoint": config.resolve_endpoint(),
+		"consent_base_url": config.consent_base_url(),
+		"use_sandbox": config.use_sandbox(),
+		"app_status": None,
+		"connected_at": None,
+		"primary_marketplace": None,
+		"primary_marketplace_id": None,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def ensure_connection():
+	"""Make sure this site has a connection to configure, and say which.
+
+	What the settings screen calls before its first save. Creates nothing on a
+	bench that already has one — see `connections.ensure_default`, which is where
+	the reasoning about when that is safe lives.
+	"""
+	_require_manager()
+	return {"connection": connections.ensure_default()}
+
+
 @frappe.whitelist()
 def get_connection_status(connection=None):
 	"""Return the current connection status (never exposes the token)."""
+	if not connection and not connections.names():
+		return _unconfigured_status()
 	conn = connections.resolve(connection)
 	marketplace_id = None
 	if conn.primary_marketplace:
@@ -131,6 +177,10 @@ def get_consent_url(connection=None):
 	is not already this session.
 	"""
 	_require_manager()
+	# Connecting *is* the setup step, so a bench with no connection gets one here
+	# rather than being told to go and make it in the Desk first. Nothing is
+	# created on a bench that already has one.
+	connection = connection or connections.ensure_default()
 	state = oauth.issue_state(connection)  # consent_url asserts the app credentials are set
 	return {
 		"url": oauth.consent_url(state, connection),
@@ -1015,10 +1065,16 @@ def get_orders_sync_status(connection=None):
 	sales reads return lies by omission, answering a period the sync never
 	covered with a confident zero.
 	"""
-	conn = connections.resolve(connection)
 	span = {"first_order_date": None, "last_order_date": None, "synced_orders": 0}
+	if not connection and not connections.names():
+		# Same reasoning as `_unconfigured_status`: this is one of four reads the
+		# settings screen makes on load, and a throw here blanks the screen.
+		return {"configured": False, "last_sync_at": None, **span}
+
+	conn = connections.resolve(connection)
 	if frappe.db.exists("DocType", "Sales Order"):
 		span = sales.coverage()
+
 	return {
 		"configured": bool(conn.orders_customer),
 		"last_sync_at": conn.last_orders_sync_at,

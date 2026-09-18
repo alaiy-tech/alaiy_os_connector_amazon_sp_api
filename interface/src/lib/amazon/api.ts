@@ -172,6 +172,19 @@ export function completeOauth(params: {
   return post<AmazonOauthResult>("complete_oauth", params, "Could not complete the Amazon authorization.");
 }
 
+/**
+ * Make sure this site has a connection to configure, and say which.
+ *
+ * Called before the first save on a bench that has none. The platform's
+ * registry-driven save writes to whatever settings DocType a connector
+ * registered and cannot create its first row — `Amazon Connection` is named
+ * `field:connection_id`, which only this app knows. Creates nothing on a bench
+ * that already has a connection.
+ */
+export function ensureConnection(): Promise<{ connection: string }> {
+  return post<{ connection: string }>("ensure_connection", {}, "Could not set up the Amazon connection.");
+}
+
 /** Clear the stored refresh token. The register rows are left alone. */
 export function disconnectAmazon(): Promise<{ status: string }> {
   return post<{ status: string }>("disconnect", {}, "Could not disconnect the Amazon account.");
