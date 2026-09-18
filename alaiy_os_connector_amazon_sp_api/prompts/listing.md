@@ -138,8 +138,9 @@ to fill the field.
 
 ## IMAGES
 
-**This channel has no image step yet.** `get_channel_spec` will tell you so
-(`has_image_step: false`). Set `images` to an empty array and move on — do not
-describe imagery you would have wanted, do not put the missing photos in
-`needs_review`, and do not report it as a failure. The product's existing photos are
+This channel HAS an image step. `get_channel_spec` will tell you so
+(`has_image_step: true`) — call `prepare_images` as the shared system prompt's step 7
+describes, and copy its `images` result verbatim into your output. Do not skip this
+tool or assume `images` should stay empty; that would leave the listing's gallery
+untranslated. The product's existing photos are
 still shown to you by `get_product`, and reading them is most of what they are for.
