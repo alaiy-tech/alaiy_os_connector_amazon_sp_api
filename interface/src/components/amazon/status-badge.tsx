@@ -89,12 +89,16 @@ const CONNECTION_TINTS: Record<string, Tint> = {
   connected: "good",
   error: "bad",
   not_configured: "unknown",
+  no_connection: "unknown",
 };
 
 const CONNECTION_LABELS: Record<string, string> = {
   connected: "Connected",
   error: "Error",
   not_configured: "Not connected",
+  // No `Amazon Connection` on the site at all, rather than one that has not
+  // authorized yet. Saving or connecting on the settings screen creates it.
+  no_connection: "Not set up",
 };
 
 export function ConnectionStatusBadge({ status, className }: { status?: string | null; className?: string }) {

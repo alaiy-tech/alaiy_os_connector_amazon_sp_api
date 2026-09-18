@@ -19,7 +19,13 @@
 // ── connection ───────────────────────────────────────────────────────────────
 
 /** `Amazon Connection.last_status`. "not_configured" also covers "never tried". */
-export type AmazonConnectionState = "not_configured" | "connected" | "error";
+/**
+ * `not_configured` is a seller who has not authorized yet; `no_connection` is a
+ * site with no seller on it at all — no `Amazon Connection` record, which is
+ * every bench where nobody has opened this screen yet. They read almost the same
+ * and lead to different first steps, so the backend keeps them apart.
+ */
+export type AmazonConnectionState = "not_configured" | "no_connection" | "connected" | "error";
 
 export interface AmazonConnectionStatus {
   status: AmazonConnectionState | string;
