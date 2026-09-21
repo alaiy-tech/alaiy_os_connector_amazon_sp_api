@@ -7,11 +7,12 @@ about one client's own brand portfolio, not about this agent, so this module
 owns none of it -- it only knows the deployment-agnostic mechanism. A
 deployment declares its house brands under `amazon_listing_house_brands` in
 its own hooks.py (a flat list of the brand names themselves -- see whichever
-customer app overrides this agent, per `agent_meta.find_override`) and
-describes what each one covers in its own `agents/amazon_listing.md` prompt
-override, the same file that carries its house style and category rules. A
-site with no house brands just registers neither, and this agent enriches
-listings with no brand opinion at all rather than failing.
+customer app overrides the shared listing agent, per
+`alaiy_os_agents.agents.listing.meta.find_override`) and describes what each
+one covers in its own `agents/listing.md` prompt override, the same file that
+carries its house style and category rules. A site with no house brands just
+registers neither, and this agent enriches listings with no brand opinion at
+all rather than failing.
 
 Unlike the product type (see product_type.py), this genuinely IS the model's
 own judgement: a category (Item Group) is a fact about where a product sells
