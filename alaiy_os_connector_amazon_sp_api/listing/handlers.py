@@ -244,12 +244,13 @@ def resolve_image_plan(listing):
 	return image_plan(main=main, gallery=family, main_fallback=fallback)
 
 
-# ── the image step: translate the gallery ─────────────────────────────────────
-# There is no background extraction on this site's AI client yet (only
-# `translate_image`), so every photo -- main image included -- goes through
-# translation rather than a white-background composite. A translated main image
-# is flagged in `needs_review` rather than silently shipped as compliant, since
-# Amazon requires the main tile on a plain white background.
+# ── the image step: translate the gallery, white-background the main tile ─────
+# Both go through alphashop, via the `ai_client` seam's `translate_image` and
+# `white_background`. `white_bg_images` only ever applies to the main tile --
+# see `_ops_for` -- chained after translation when both toggles are on. If
+# `white_bg_images` is off, the main image is translated only and flagged in
+# `needs_review` rather than silently shipped as non-compliant, since Amazon
+# requires the main tile on a plain white background.
 
 # How many photos are translated at once. Paid third-party calls, in parallel,
 # capped so a listing with a big gallery does not fire them all simultaneously.
@@ -257,61 +258,98 @@ _TRANSLATE_CONCURRENCY = 4
 
 _REUSED_NOTE = "Processed on an earlier run; reused rather than paid for again."
 _NO_EXTRACT_NOTE = (
-	"Background extraction is not available on this site, so this main image was "
-	"only translated. Amazon requires the main image on a plain white background -- "
-	"replace it before publishing."
+	"white_bg_images was off, so the main image was only translated, not placed "
+	"on a white background. Amazon requires the main image on a plain white "
+	"background -- replace it before publishing, or re-run with white_bg_images on."
 )
 
+# ops tuple <-> the `kind` column, so gate 3 can tell "translated" apart from
+# "translated and put on a white background" and redo only what changed.
+_OPS_KIND = {
+	("translate",): "translated",
+	("white_bg",): "white_bg",
+	("translate", "white_bg"): "translated_white_bg",
+}
+_KIND_OPS = {v: k for k, v in _OPS_KIND.items()}
 
-def _already_translated(sku):
-	"""{(source_url, role): url} for photos an earlier run already produced.
 
-	Keyed on role as well as url: the same supplier photo used as the main image
-	and as a gallery image is two different results, and reusing one for the
-	other would misrepresent what was actually done to it.
+def _ops_for(role, translate, white_bg):
+	"""Which operations apply to a target of this role, in the order they run.
+
+	White background only ever applies to the main tile -- Amazon's rule is
+	about the one tile shoppers see in search, not the gallery -- so a gallery
+	target's ops never include it regardless of the toggle.
+	"""
+	ops = []
+	if translate:
+		ops.append("translate")
+	if white_bg and role == "main":
+		ops.append("white_bg")
+	return tuple(ops)
+
+
+def _already_processed(sku):
+	"""{(source_url, role, ops): url} for (photo, role, operations) an earlier
+	run already produced.
+
+	Keyed on ops as well as role and url: turning white_bg_images on for a main
+	image already translated must redo the compositing rather than reuse the
+	translate-only result as if it were done.
 	"""
 	if not sku or not frappe.db.exists(ENRICHED_DOCTYPE, sku):
 		return {}
 	rows = frappe.get_all(
 		"Amazon Enriched Listing Image",
 		filters={"parent": sku, "parenttype": ENRICHED_DOCTYPE},
-		fields=["source_url", "role", "url"],
+		fields=["source_url", "role", "url", "kind"],
 	)
 	return {
-		(row.source_url, row.role or "gallery"): row.url
+		(row.source_url, row.role or "gallery", _KIND_OPS[row.kind]): row.url
 		for row in rows
-		if row.source_url and row.url
+		if row.source_url and row.url and row.kind in _KIND_OPS
 	}
 
 
-def _translate_one(client, public_url):
+def _process_one(client, public_url, ops):
 	"""One photo, off the main thread. Returns (content, media_type, error).
 
-	Only network calls happen here: `translate_image` (thread-safe by the client's
-	own contract) and fetching the result's bytes ourselves, both plain `requests`
-	calls with no Frappe binding. `public_url` must already be resolved -- a local
-	File path needs `frappe.utils.get_url`, which reads site config that is not
-	available inside a worker thread, so `images.public_image_url` is called on
-	the main thread before the pool starts. Saving a File needs the same request
-	context, so that also happens back on the main thread once every photo in the
-	batch has come back. The provider's own url is never returned to the caller --
-	its docstring says it may expire.
+	Runs `ops` IN ORDER on the same url, chaining each step's output into the
+	next: translate first, then white-background the translated result, never
+	the reverse -- a main image needing both should end up with English text
+	on a white background, not either op undoing the other's work. Only
+	network calls happen here: `translate_image` / `white_background`
+	(thread-safe by the client's own contract) and fetching the final result's
+	bytes ourselves, both plain `requests` calls with no Frappe binding.
+	`public_url` must already be resolved -- a local File path needs
+	`frappe.utils.get_url`, which reads site config that is not available
+	inside a worker thread, so `images.public_image_url` is called on the main
+	thread before the pool starts. Saving a File needs the same request
+	context, so that also happens back on the main thread once every photo in
+	the batch has come back. The provider's own url is never returned to the
+	caller -- its docstring says it may expire.
 	"""
 	try:
-		result = client.translate_image(public_url)
-		translated_url = result.get("translated_url") or result.get("url") or result.get("image_url")
-		if not translated_url:
-			return None, None, "the translation service returned no url"
-		content, mime = images.fetch_image_bytes(translated_url)
+		url = public_url
+		if "translate" in ops:
+			result = client.translate_image(url)
+			url = result.get("translated_url") or result.get("url") or result.get("image_url")
+			if not url:
+				return None, None, "the translation service returned no url"
+		if "white_bg" in ops:
+			result = client.white_background(url)
+			url = result.get("white_bg_url") or result.get("url")
+			if not url:
+				return None, None, "the white-background service returned no url"
+		content, mime = images.fetch_image_bytes(url)
 		return content, mime, None
 	except Exception as exc:
 		return None, None, str(exc)
 
 
 def _rehost(sku, role, content, mime):
-	"""Save a translated photo as a public File, so its url outlives the provider's.
+	"""Save a processed photo as a public File, so its url outlives the provider's.
 
-	Must run on the main thread -- see `_translate_one`. Not attached to the
+	Must run on the main thread -- see `_process_one`. Not attached to the
 	Amazon Enriched Listing doctype/name (`dt`/`dn` left blank): the enriched
 	listing may not exist yet the first time this runs, since `save_listing`
 	hasn't been called yet in the same agent turn.
@@ -321,12 +359,15 @@ def _rehost(sku, role, content, mime):
 	return save_file(file_name, content, None, None, is_private=0).file_url
 
 
-def prepare_images(product, enabled, image_urls=None):
-	"""Translate a listing's photos for Amazon -- the channel's `prepare_images` step.
+def prepare_images(product, translate=False, white_bg=False, generate=False, image_urls=None):
+	"""Translate and/or white-background a listing's photos for Amazon.
 
-	`product` is the seller sku; `enabled` is the per-request opt-in toggle,
-	relayed verbatim by the shared listing agent's `prepare_images` tool.
-	`image_urls` only applies to a URL-only product with no listing record.
+	`product` is the seller sku; `translate`/`white_bg` are the per-request
+	opt-in toggles, relayed verbatim by the shared listing agent's
+	`prepare_images` tool -- independent of each other, and white_bg only ever
+	applies to the main tile (see `_ops_for`). `generate` (AI retouch) has no
+	equivalent on this channel and is accepted but ignored. `image_urls` only
+	applies to a URL-only product with no listing record.
 
 	Returns {"images": [{role, kind, source_url, url, note}, ...], "note": str}.
 	The FIRST entry is always the main image, the rest are the family gallery in
@@ -350,57 +391,75 @@ def prepare_images(product, enabled, image_urls=None):
 			),
 		}
 
-	if not enabled:
+	if not translate and not white_bg:
 		return {
 			"images": [],
 			"note": (
-				"The listing has photos, but the prepare_images toggle is off, so no "
-				"images were processed."
+				"The listing has photos, but translate_images and white_bg_images are "
+				"both off, so no images were processed."
 			),
 		}
 
 	from alaiy_os.engine import llm
 
 	client = llm.image_client()
-	if not client.image_support().get("translate"):
+	support = client.image_support()
+	if translate and not support.get("translate"):
 		frappe.throw(
-			"Image preparation is not available on this site (the active AI client "
+			"Image translation is not available on this site (the active AI client "
 			"cannot translate images). Do NOT retry; return each image with url=null "
 			"so the team can prepare them manually."
 		)
+	if white_bg and not support.get("white_bg"):
+		frappe.throw(
+			"White background is not available on this site (the active AI client "
+			"cannot do this). Do NOT retry; return each image with url=null so the "
+			"team can prepare them manually."
+		)
 
-	done = _already_translated(product)
-	targets = [dict(t, url=done.get((t["source_url"], t["role"]))) for t in plan["targets"]]
-	todo = [t for t in targets if not t["url"]]
+	for target in plan["targets"]:
+		target["ops"] = _ops_for(target["role"], translate, white_bg)
+
+	done = _already_processed(product)
+	targets = [
+		dict(t, url=done.get((t["source_url"], t["role"], t["ops"]))) for t in plan["targets"]
+	]
+	todo = [t for t in targets if t["ops"] and not t["url"]]
 
 	fresh = {}
 	if todo:
-		# Resolved here, on the main thread -- see `_translate_one`.
+		# Resolved here, on the main thread -- see `_process_one`.
 		public_urls = [images.public_image_url(t["source_url"]) for t in todo]
 		with ThreadPoolExecutor(max_workers=min(_TRANSLATE_CONCURRENCY, len(todo))) as pool:
-			outcomes = list(pool.map(lambda u: _translate_one(client, u), public_urls))
+			outcomes = list(
+				pool.map(lambda pair: _process_one(client, pair[1], pair[0]["ops"]), zip(todo, public_urls))
+			)
 		for target, (content, mime, error) in zip(todo, outcomes, strict=True):
-			key = (target["source_url"], target["role"])
+			key = (target["source_url"], target["role"], target["ops"])
 			if error:
 				fresh[key] = (None, f"Image preparation failed: {error}"[:200])
 				continue
 			# Back on the main thread: saving a File needs Frappe's request context.
 			fresh[key] = (_rehost(product, target["role"], content, mime), None)
 
-	# Every target is either freshly translated above (`todo`) or already had a
-	# url from an earlier run (`done`) — `plan["targets"]` has no third case.
+	# Every target with ops is either freshly processed above (`todo`) or already
+	# had a url from an earlier run (`done`); a target with no ops (white_bg off
+	# and it's a gallery role that never gets it, or both toggles off for it) is
+	# neither.
 	images_out = []
 	for target in targets:
-		key = (target["source_url"], target["role"])
+		key = (target["source_url"], target["role"], target["ops"])
 		if key in fresh:
 			url, note = fresh[key]
-			if not note and target["role"] == "main":
+			if not note and target["role"] == "main" and target["ops"] == ("translate",):
 				note = _NO_EXTRACT_NOTE
-		else:
+		elif target["url"]:
 			url, note = target["url"], _REUSED_NOTE
+		else:
+			url, note = None, "No image operation was requested for this photo."
 		images_out.append({
 			"role": target["role"],
-			"kind": "translated",
+			"kind": _OPS_KIND.get(target["ops"]),
 			"source_url": target["source_url"],
 			"url": url,
 			"note": note,
@@ -416,12 +475,12 @@ def prepare_images(product, enabled, image_urls=None):
 			"was used as the main image. Add 'Main image (no variant photo)' to "
 			"needs_review and say so in notes."
 		)
-	notes.append(
-		"Background extraction is unavailable on this site, so the main image was "
-		"translated rather than placed on a white background. Add 'Main image "
-		"background' to needs_review and say so in notes."
-	)
-	failed = sum(1 for img in images_out if not img["url"])
+	if images_out and images_out[0]["note"] == _NO_EXTRACT_NOTE:
+		notes.append(
+			"The main image was translated but not placed on a white background. Add "
+			"'Main image background' to needs_review and say so in notes."
+		)
+	failed = sum(1 for img in images_out if not img["url"] and img["kind"])
 	if failed:
 		notes.append(f"{failed} photo(s) failed to process and were left with url=null.")
 
