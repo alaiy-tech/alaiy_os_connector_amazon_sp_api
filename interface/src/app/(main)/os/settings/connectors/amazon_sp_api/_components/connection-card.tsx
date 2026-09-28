@@ -24,8 +24,11 @@ import { ConnectionStatusBadge } from "@/components/amazon/status-badge";
 import { amazonDateTime, textOr } from "@/lib/amazon/format";
 import type { AmazonConnectionStatus } from "@/lib/amazon/types";
 
-/** `Amazon Connection.region` — the three SP-API region groups. */
-const REGIONS = [
+/** `Amazon Connection.region` — the three SP-API region groups.
+ *
+ * Exported because the Add-connection dialog offers the same three: a region is
+ * set when a seller is created, and two lists of it would drift. */
+export const REGIONS = [
   { value: "NA", label: "NA — North America" },
   { value: "EU", label: "EU — Europe, India, Middle East" },
   { value: "FE", label: "FE — Far East, Australia" },
