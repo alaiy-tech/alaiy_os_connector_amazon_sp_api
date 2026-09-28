@@ -33,23 +33,39 @@ def redirect_uri():
 	return f"{config.app_url()}/amazon-oauth/callback"
 
 
-def _state_cache_key():
-	# Bind the CSRF state to the current session.
-	return f"amazon_oauth_state::{frappe.session.sid}"
+def _state_cache_key(state):
+	# Keyed by the state itself, never by the session that minted it.
+	#
+	# The round trip does not come back to the hostname it left from. The
+	# redirect URI is built from `app_url`, and on a split deployment that is the
+	# *other* host: the OS frontend owns the site's hostname and the Desk moves
+	# to `desk.<host>`, or the reverse, depending on which side `app_url` points
+	# at. Frappe's `sid` cookie carries no Domain attribute, so each of those two
+	# hosts holds a session of its own — and a key built from the session id is
+	# looked for, on the way back, in a session that never minted anything.
+	#
+	# The state is a 32-character `generate_hash`, single-use and TTL-bound, so
+	# it is no easier to guess as a key than it was as a value. What the session
+	# id used to provide is the user check in `consume_state` instead.
+	return f"amazon_oauth_state::{state}"
 
 
 def issue_state(connection=None):
 	"""
-	Mint a single-use state, remembering which connection it authorises.
+	Mint a single-use state, remembering who it is for and what it authorises.
 
 	The connection is stored with the state rather than re-resolved in the
 	callback: by then the operator may have several, and Amazon tells us
 	nothing about which one the round trip was for.
+
+	The user is stored for the reason the cache key used to be the session id —
+	so that a state can only ever be spent by the operator who started it. See
+	`_state_cache_key` for why the session id itself cannot do that job here.
 	"""
 	state = frappe.generate_hash(length=32)
 	frappe.cache().set_value(
-		_state_cache_key(),
-		{"state": state, "connection": connections.resolve_name(connection)},
+		_state_cache_key(state),
+		{"user": frappe.session.user, "connection": connections.resolve_name(connection)},
 		expires_in_sec=STATE_TTL,
 	)
 	return state
@@ -63,16 +79,22 @@ def consume_state(received):
 	back-button replay far more often than it is an attack, and both callbacks
 	below report it as a failed connection with a "start again" message.
 
-	Single-use — the cache entry is dropped whether or not it matched.
+	None covers two things, which are one thing to the operator. There is no
+	such state — expired, already spent, or never issued by this bench at all —
+	or it belongs to somebody else. The second is the check that makes this
+	safe to key on the state: a forged callback can only attach an Amazon
+	account to this bench if it also arrives as the user who asked for one.
+
+	Single-use — the entry is dropped whether or not the user checks out.
 	"""
-	stored = frappe.cache().get_value(_state_cache_key())
-	frappe.cache().delete_value(_state_cache_key())
-	if not stored or not received:
+	if not received:
 		return None
-	# Tolerates an entry written before states carried a connection.
-	if isinstance(stored, str):
-		return connections.DEFAULT_ID if stored == received else None
-	if stored.get("state") != received:
+	key = _state_cache_key(received)
+	stored = frappe.cache().get_value(key)
+	frappe.cache().delete_value(key)
+	if not stored:
+		return None
+	if stored.get("user") != frappe.session.user:
 		return None
 	return stored.get("connection")
 
