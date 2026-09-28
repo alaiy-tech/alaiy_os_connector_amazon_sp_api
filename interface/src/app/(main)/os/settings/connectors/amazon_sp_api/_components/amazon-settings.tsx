@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 
 import { useSearchParams } from "next/navigation";
 
-import { type ConnectorConfig, fetchConnectorConfig, saveAndTestConnector } from "@alaiy-os/frappe/connectors";
 import { Alert, AlertDescription, AlertTitle } from "@alaiy-os/ui/alert";
 import { Button } from "@alaiy-os/ui/button";
 import { Skeleton } from "@alaiy-os/ui/skeleton";
@@ -15,22 +14,32 @@ import { toast } from "sonner";
 import { ANY_MARKETPLACE } from "@/components/amazon/marketplace-picker";
 import {
   amazonErrorMessage,
+  createConnection,
   disconnectAmazon,
   ensureConnection,
   fetchConfigStatus,
+  fetchConnectionConfig,
   fetchConnectionStatus,
   fetchConsentUrl,
   fetchOrdersSyncStatus,
+  listConnections,
+  saveConnection,
+  setDefaultConnection,
   syncOrders,
   testConnection,
 } from "@/lib/amazon/api";
-import type { AmazonConfigStatus, AmazonConnectionStatus, AmazonOrdersSyncStatus } from "@/lib/amazon/types";
+import type {
+  AmazonConfigStatus,
+  AmazonConnectionConfig,
+  AmazonConnectionStatus,
+  AmazonConnectionSummary,
+  AmazonOrdersSyncStatus,
+} from "@/lib/amazon/types";
 
 import { AppCredentialsCard } from "./app-credentials-card";
 import { ConnectionCard, type ConnectionForm } from "./connection-card";
+import { ConnectionSwitcher } from "./connection-switcher";
 import { OrderDefaultsCard, type OrdersForm } from "./order-defaults-card";
-
-const CONNECTOR_ID = "amazon_sp_api";
 
 /** No `Amazon Connection` on this site yet — see AmazonConnectionState. */
 const NO_CONNECTION = "no_connection";
@@ -46,6 +55,9 @@ const NO_CONNECTION = "no_connection";
  * and a multi-seller site all arrived as the same red card.
  */
 type LoadFailures = {
+  /** The list of sellers — fatal in a way the others are not, since it decides
+      which connection everything else is about. */
+  connections?: string;
   connection?: string;
   credentials?: string;
   fields?: string;
@@ -53,25 +65,33 @@ type LoadFailures = {
 };
 
 /**
- * Everything this connector needs to run, in the OS.
+ * Everything this connector needs to run, in the OS — for one seller at a time.
  *
- * Two different backends, for two different reasons:
+ * Every read and write below names its connection, because a bench holds several
+ * since "one bench, many sellers". `ConnectionSwitcher` is where that name comes
+ * from, and nothing here resolves a connection by omission: on a bench with two
+ * sellers an unnamed call either refuses or quietly answers about whichever one
+ * carries `is_default`, and both are wrong for a screen that is showing the
+ * other.
  *
- *   * The **DocType fields** (region, marketplace, order defaults) go through the
- *     platform's registry-driven connector API, which reads and writes whatever
- *     settings DocType a connector registered. No endpoint of our own, and the
- *     base still knows nothing about Amazon.
- *   * The **connection itself** goes through this app's own methods, because OAuth
- *     is not a form: there is a consent redirect, a token that never comes back,
- *     and a preflight that can fail for reasons worth reading.
+ * That is also why none of this goes through the platform's registry-driven
+ * connector API any more. `alaiy_os.api.connectors` is keyed on connector_id and
+ * resolves the settings record itself, so it cannot be told which seller is on
+ * screen — the same wall `alaiy_os_connector_shopify/api/settings.py` hit, and
+ * the same answer: this app's own endpoints, which are the platform's plus the
+ * argument the platform cannot have.
  *
- * Saving always tests, because that is the only call the platform API offers — and
- * it is the right default anyway: settings saved but never tested are how a
- * connector sits at "untested" while every screen quietly refuses to work.
+ * Saving still always tests. Settings saved but never tested are how a connector
+ * sits at "untested" while every screen quietly refuses to work.
  */
 export function AmazonSettings() {
   const searchParams = useSearchParams();
 
+  const [connectionList, setConnectionList] = useState<AmazonConnectionSummary[]>([]);
+  /** Which seller every call on this screen names. Null only on a bench with none. */
+  const [selected, setSelected] = useState<string | null>(null);
+  /** The sellers are known — so the reads below can name one instead of guessing. */
+  const [listLoaded, setListLoaded] = useState(false);
   const [status, setStatus] = useState<AmazonConnectionStatus | null>(null);
   const [config, setConfig] = useState<AmazonConfigStatus | null>(null);
   const [ordersStatus, setOrdersStatus] = useState<AmazonOrdersSyncStatus | null>(null);
@@ -120,26 +140,81 @@ export function AmazonSettings() {
     }
   }, [searchParams]);
 
+  /**
+   * Which sellers exist, and which one is on screen.
+   *
+   * Read on its own and before the rest, because it decides what the rest is
+   * *about*. Folding it into the reads below would mean firing them with no
+   * connection named — which on a multi-seller bench is a refusal, and on one
+   * with a default is an answer about the wrong seller.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken is a trigger, not a value read here — bumping it is how a save re-reads.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadConnections() {
+      try {
+        const rows = await listConnections();
+        if (cancelled) return;
+        setConnectionList(rows);
+        // Keep the operator where they were across a reload; otherwise the
+        // default, otherwise whatever exists. A bench with none stays null, and
+        // the reads below then name nothing on purpose — there is nothing to name.
+        setSelected((current) => {
+          if (current && rows.some((row) => row.connection === current)) return current;
+          return rows.find((row) => row.is_default)?.connection ?? rows[0]?.connection ?? null;
+        });
+        setFailures((current) => ({ ...current, connections: undefined }));
+      } catch (error) {
+        if (cancelled) return;
+        setConnectionList([]);
+        setFailures((current) => ({
+          ...current,
+          connections: amazonErrorMessage(error, "Could not list the Amazon connections."),
+        }));
+      } finally {
+        if (!cancelled) setListLoaded(true);
+      }
+    }
+
+    void loadConnections();
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadToken]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken is a trigger, not a value read here — bumping it is how a save re-reads.
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
+      // Nothing to scope the reads to yet. `loading` stays true, so the screen
+      // shows its skeleton rather than a set of cards about nobody.
+      if (!listLoaded) return;
       setLoading(true);
+      const connection = selected ?? undefined;
 
       // Settled, not all: these four reads are independent, and one of them
-      // throwing is not a reason to render none of the others. The DocType
-      // fields in particular go through the platform's connector API, which can
-      // refuse for reasons that say nothing about whether Amazon is reachable.
-      const [connectionStatus, configStatus, connectorConfig, ordersSync] = await Promise.allSettled([
-        fetchConnectionStatus(),
+      // throwing is not a reason to render none of the others. The app
+      // credentials in particular are a site_config question, and answer nothing
+      // about whether this seller is reachable.
+      const [connectionStatus, configStatus, connectionConfig, ordersSync] = await Promise.allSettled([
+        fetchConnectionStatus(connection),
         fetchConfigStatus(),
-        fetchConnectorConfig(CONNECTOR_ID),
-        fetchOrdersSyncStatus(),
+        fetchConnectionConfig(connection),
+        fetchOrdersSyncStatus(connection),
       ]);
       if (cancelled) return;
 
-      const failed: LoadFailures = {};
+      // Every key set, not just the failed ones: these are merged over the list
+      // read's own failure, and a stale message for a read that has since
+      // succeeded would sit on the screen forever.
+      const failed: LoadFailures = {
+        connection: undefined,
+        credentials: undefined,
+        fields: undefined,
+        orders: undefined,
+      };
 
       if (connectionStatus.status === "fulfilled") setStatus(connectionStatus.value);
       else {
@@ -153,12 +228,12 @@ export function AmazonSettings() {
         failed.credentials = amazonErrorMessage(configStatus.reason, "Could not read the app credentials.");
       }
 
-      if (connectorConfig.status === "fulfilled") {
-        applyValues(connectorConfig.value);
+      if (connectionConfig.status === "fulfilled") {
+        applyValues(connectionConfig.value);
         setFieldsLoaded(true);
       } else {
         setFieldsLoaded(false);
-        failed.fields = amazonErrorMessage(connectorConfig.reason, "Could not read this connector's settings fields.");
+        failed.fields = amazonErrorMessage(connectionConfig.reason, "Could not read this connection's settings.");
       }
 
       // The one read that can legitimately fail on its own: no ERPNext on the
@@ -169,12 +244,12 @@ export function AmazonSettings() {
         failed.orders = amazonErrorMessage(ordersSync.reason, "Could not read the order sync status.");
       }
 
-      setFailures(failed);
+      setFailures((current) => ({ connections: current.connections, ...failed }));
       setLoading(false);
     }
 
-    function applyValues(connectorConfig: ConnectorConfig) {
-      const values = connectorConfig.values;
+    function applyValues(connectionConfig: AmazonConnectionConfig) {
+      const values = connectionConfig.values;
       setConnection({
         region: asText(values.region) || "NA",
         appStatus: asText(values.app_status) || "Draft",
@@ -194,10 +269,44 @@ export function AmazonSettings() {
     return () => {
       cancelled = true;
     };
-  }, [reloadToken]);
+  }, [selected, listLoaded, reloadToken]);
 
   function reload() {
     setReloadToken((token) => token + 1);
+  }
+
+  /** Switching seller re-reads everything, because everything was about the last one. */
+  function select(connection: string) {
+    if (connection === selected) return;
+    setResult(null);
+    setSelected(connection);
+  }
+
+  async function addConnection(values: { connection_id: string; label: string; region: string }) {
+    try {
+      const created = await createConnection(values);
+      setSelected(created.connection);
+      reload();
+      toast.success(`Added ${created.label}. Connect it to authorize the seller.`);
+    } catch (error) {
+      toast.error(amazonErrorMessage(error, "Could not add the Amazon connection."));
+      // Rethrown so the dialog stays open over what was typed.
+      throw error;
+    }
+  }
+
+  async function makeDefault() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const updated = await setDefaultConnection(selected);
+      toast.success(`${updated.label} is now the default connection.`);
+      reload();
+    } catch (error) {
+      toast.error(amazonErrorMessage(error, "Could not change the default connection."));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function save() {
@@ -215,15 +324,14 @@ export function AmazonSettings() {
         orders_sync_from: toFrappeDateTime(orders.syncFrom),
       };
 
-      // A bench with no connection has nothing for the platform's save to write
-      // to, and the platform cannot create the first row: `Amazon Connection` is
-      // named `field:connection_id`, which only this app knows. So the first
-      // save is what makes the connection, which is also the only moment it is
-      // unambiguous — with no other seller on the site there is none to confuse
-      // it with.
-      if (status?.status === NO_CONNECTION) await ensureConnection();
+      // A bench with no connection has nothing to write to. The first save makes
+      // it, which is also the only moment it can be made without being named —
+      // with no other seller on the site there is none to confuse it with. Every
+      // one after that comes from the Add dialog, with an id somebody chose.
+      const target = selected ?? (await ensureConnection()).connection;
 
-      const outcome = await saveAndTestConnector(CONNECTOR_ID, values);
+      const outcome = await saveConnection(target, values);
+      setSelected(target);
 
       if (outcome.success) {
         setResult(outcome);
@@ -250,11 +358,11 @@ export function AmazonSettings() {
     setConnecting(true);
     setResult(null);
     try {
-      const { url } = await fetchConsentUrl();
+      const { url } = await fetchConsentUrl(selected ?? undefined);
       // Leaves the OS for Amazon's consent screen and comes back to
-      // /amazon-oauth/callback. Deliberately not a new tab: the state is
-      // single-use and session-bound, so a stray second attempt in the original
-      // tab could only ever fail.
+      // /amazon-oauth/callback, which authorizes the seller this state was
+      // issued for. Deliberately not a new tab: the state is single-use, so a
+      // stray second attempt in the original tab could only ever fail.
       window.location.assign(url);
     } catch (error) {
       toast.error(amazonErrorMessage(error, "Could not start the Amazon authorization."));
@@ -266,7 +374,7 @@ export function AmazonSettings() {
     setBusy(true);
     setResult(null);
     try {
-      await disconnectAmazon();
+      await disconnectAmazon(selected ?? undefined);
       toast.success("Disconnected. The stored token is gone.");
       reload();
     } catch (error) {
@@ -280,7 +388,7 @@ export function AmazonSettings() {
     setBusy(true);
     setResult(null);
     try {
-      const outcome = await testConnection();
+      const outcome = await testConnection(selected ?? undefined);
       setResult(outcome);
       if (outcome.success) toast.success("Connected.");
       else toast.error(outcome.message || "The connection test failed.");
@@ -295,7 +403,7 @@ export function AmazonSettings() {
   async function syncOrdersNow() {
     setSyncingOrders(true);
     try {
-      await syncOrders(connection.primaryMarketplace || undefined);
+      await syncOrders(connection.primaryMarketplace || undefined, selected ?? undefined);
       toast.success("Order sync queued. It runs in the background.");
     } catch (error) {
       toast.error(amazonErrorMessage(error, "Could not start the order sync."));
@@ -316,9 +424,13 @@ export function AmazonSettings() {
   // Each read that failed, said in its own words. A screen where three of the
   // four worked shows the three and names the one that did not, rather than
   // replacing all of it with a guess at what went wrong.
-  const failureList = [failures.connection, failures.credentials, failures.fields, failures.orders].filter(
-    (message): message is string => Boolean(message),
-  );
+  const failureList = [
+    failures.connections,
+    failures.connection,
+    failures.credentials,
+    failures.fields,
+    failures.orders,
+  ].filter((message): message is string => Boolean(message));
 
   return (
     <div className="flex flex-col gap-4">
@@ -348,6 +460,15 @@ export function AmazonSettings() {
           <AlertDescription>{result.message}</AlertDescription>
         </Alert>
       )}
+
+      <ConnectionSwitcher
+        connections={connectionList}
+        selected={selected}
+        busy={busy || connecting}
+        onSelect={select}
+        onAdd={addConnection}
+        onMakeDefault={() => void makeDefault()}
+      />
 
       {status?.status === NO_CONNECTION && (
         <Alert>

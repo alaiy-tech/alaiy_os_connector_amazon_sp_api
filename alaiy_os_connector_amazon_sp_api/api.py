@@ -25,6 +25,7 @@ manager gate that every other live call here does.
 """
 
 import json
+import re
 from urllib.parse import quote
 
 import frappe
@@ -127,6 +128,178 @@ def get_connection_status(connection=None):
 		"primary_marketplace": conn.primary_marketplace,
 		"primary_marketplace_id": marketplace_id,
 	}
+
+
+# --- connections: several sellers on one bench --------------------------------
+# What the settings screen may read and write.
+#
+# An allowlist, where the platform's connector API and the Shopify settings API
+# it was copied from both filter on fieldtype. Half this DocType is not the
+# operator's to set: `refresh_token` arrives from the consent round trip and
+# from nowhere else, `last_status` / `connected_at` / `selling_partner_id` are
+# written by the preflight, and `connection_id` names the row. A fieldtype
+# filter would let the Password through and put a "leave blank to keep" box on
+# the screen for a token no human has ever held.
+EDITABLE_FIELDS = (
+	"label",
+	"region",
+	"app_status",
+	"primary_marketplace",
+	"gtin_exempt_brands",
+	"orders_customer",
+	"orders_company",
+	"orders_warehouse",
+	"orders_selling_price_list",
+	"orders_fallback_item",
+	"orders_sync_from",
+)
+
+# A connection id becomes the docname (`autoname: field:connection_id`), so it
+# has to survive being one: no "/" to end a REST path early, no "%" to be
+# decoded twice on the way to `get_connect_url`.
+CONNECTION_ID = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _connection_summary(doc):
+	"""One row of the switcher: which seller, and whether it works."""
+	return {
+		"connection": doc.name,
+		"label": doc.get("label") or doc.name,
+		"is_default": bool(doc.get("is_default")),
+		"status": doc.get("last_status") or "not_configured",
+		"message": doc.get("last_status_message"),
+		"connected": doc.is_connected(),
+		"selling_partner_id": doc.get("selling_partner_id"),
+		"region": config.resolve_region(doc.get("region")),
+		"connected_at": doc.get("connected_at"),
+	}
+
+
+@frappe.whitelist()
+def list_connections():
+	"""Every Amazon Connection on this site, oldest first.
+
+	An empty list rather than a refusal on a bench that has none: this is the
+	read the settings screen decides its whole shape from, and "there are no
+	sellers yet" is a state it has to be able to draw rather than a failure.
+	"""
+	_require_manager()
+	return [
+		_connection_summary(frappe.get_cached_doc(connections.DOCTYPE, name)) for name in connections.names()
+	]
+
+
+@frappe.whitelist(methods=["POST"])
+def create_connection(connection_id, label=None, region="NA"):
+	"""Add a seller to this bench.
+
+	Deliberately not what `ensure_connection` does. That exists so a bench with
+	nothing on it can be configured at all, and it is safe precisely because
+	there is nothing for the row it makes to be confused with. This is the other
+	case — a second seller, named on purpose — so the id is the operator's, and
+	the row is never flagged default behind their back. Which seller an unnamed
+	call answers with stays something somebody chose.
+
+	The Shopify settings API left creation out, on the grounds that a store is
+	made where the rest of it is made. Amazon has no such place: the connection
+	*is* the seller, and the Desk form is the only other thing that can make one.
+	"""
+	_require_manager()
+	connection_id = (connection_id or "").strip()
+	if not connection_id:
+		frappe.throw(_("A connection needs an id."))
+	if not CONNECTION_ID.fullmatch(connection_id):
+		frappe.throw(
+			_("A connection id can hold letters, numbers, dots, dashes and underscores — nothing else.")
+		)
+	if frappe.db.exists(connections.DOCTYPE, connection_id):
+		# `connections.create` is idempotent and would hand back the existing
+		# row. Right for a caller reconciling state, wrong for this one: the
+		# operator asked for a new seller and would be shown someone else's.
+		frappe.throw(_("There is already an Amazon connection called {0}.").format(connection_id))
+
+	doc = connections.create(
+		connection_id,
+		region=region or "NA",
+		label=label or connection_id,
+		owner_app="alaiy_os_connector_amazon_sp_api",
+	)
+	return _connection_summary(doc)
+
+
+@frappe.whitelist(methods=["POST"])
+def set_default_connection(connection):
+	"""Make one connection the one an unnamed call resolves to.
+
+	Clears the flag everywhere else in the same breath. `resolve_name` reads the
+	default with a `get_value` filter, so two flagged rows would make it answer
+	with whichever the index reached first — a coin toss deciding which seller
+	every unnamed call is about.
+	"""
+	_require_manager()
+	name = connections.resolve_name(connection)
+	for other in connections.names():
+		frappe.db.set_value(connections.DOCTYPE, other, "is_default", 1 if other == name else 0)
+	return _connection_summary(frappe.get_doc(connections.DOCTYPE, name))
+
+
+@frappe.whitelist()
+def get_connection_config(connection=None):
+	"""One connection's settings values, named.
+
+	The platform's `get_connector_config` plus the argument it cannot have. That
+	one is keyed on connector_id and resolves the record itself — a Single, the
+	lone row, else the `is_default` one — so on a bench with several sellers it
+	either throws or, worse, answers about the default no matter which seller the
+	screen is showing. Same fix as `alaiy_os_connector_shopify/api/settings.py`.
+
+	No field metadata comes back with the values, where the Shopify one returns
+	both: this screen draws its own cards rather than rendering whatever the
+	DocType happens to hold, so metadata would be shipped and ignored.
+	"""
+	_require_manager()
+	doc = connections.resolve(connection)
+	return {
+		"connection": doc.name,
+		"label": doc.get("label") or doc.name,
+		"is_default": bool(doc.get("is_default")),
+		"values": {field: doc.get(field) for field in EDITABLE_FIELDS},
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def save_connection(connection=None, values=None):
+	"""Save one connection's settings and test them — `save_and_test`, named.
+
+	One call for the reason the platform's is one call: settings nobody tested
+	are how a connector sits at "untested" while every screen quietly refuses to
+	work. The test is this app's own, run against the connection just written,
+	which is the half the generic wrapper cannot do — it takes a connector_id and
+	has no way to say which seller it tested.
+
+	A field the caller leaves out keeps what is stored; a field it sends empty is
+	cleared. The screen posts its whole form, so both readings are deliberate.
+	"""
+	_require_manager()
+	if isinstance(values, str):
+		values = json.loads(values)
+	values = values or {}
+
+	# for_write, not resolve: resolve hands back a cached document, and saving
+	# one of those writes through a copy other requests are still reading.
+	doc = connections.for_write(connection)
+	for field, value in values.items():
+		# An unknown fieldname is dropped rather than refused: the screen sends
+		# the form it was built against, and a field removed from the DocType
+		# since should not make every save fail.
+		if field in EDITABLE_FIELDS:
+			doc.set(field, value)
+	doc.save()
+	frappe.db.commit()
+
+	# Carries the connection back because the caller may have sent none and let
+	# `resolve` pick, and the screen has to know which seller it just saved.
+	return {**test_connection(doc.name), "connection": doc.name}
 
 
 @frappe.whitelist()

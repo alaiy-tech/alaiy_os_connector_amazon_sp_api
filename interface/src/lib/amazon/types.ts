@@ -27,6 +27,42 @@
  */
 export type AmazonConnectionState = "not_configured" | "no_connection" | "connected" | "error";
 
+/**
+ * One row of the connection switcher — `api.list_connections`.
+ *
+ * A bench can hold several sellers, so "the connection" is a choice before it is
+ * a status. This is the shape that choice is made from: enough to tell two
+ * sellers apart and see which of them works, and nothing that would need a live
+ * Amazon call to fill in.
+ */
+export interface AmazonConnectionSummary {
+  /** The docname, and what every scoped endpoint takes as `connection`. */
+  connection: string;
+  label: string;
+  /** Which seller an unnamed call resolves to. At most one is flagged. */
+  is_default: boolean;
+  status: AmazonConnectionState | string;
+  message?: string | null;
+  connected: boolean;
+  selling_partner_id?: string | null;
+  region?: string | null;
+  connected_at?: string | null;
+}
+
+/**
+ * One connection's editable settings — `api.get_connection_config`.
+ *
+ * The platform's `ConnectorConfig` minus the field metadata and plus the record.
+ * No metadata because this screen draws its own cards; the record because the
+ * platform's API is keyed on connector_id and cannot name a seller.
+ */
+export interface AmazonConnectionConfig {
+  connection: string;
+  label: string;
+  is_default: boolean;
+  values: Record<string, unknown>;
+}
+
 export interface AmazonConnectionStatus {
   status: AmazonConnectionState | string;
   message?: string | null;
