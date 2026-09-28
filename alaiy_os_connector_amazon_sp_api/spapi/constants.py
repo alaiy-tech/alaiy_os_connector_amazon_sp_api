@@ -191,7 +191,7 @@ ORDERS_SYNC_OVERLAP = 300  # seconds
 # misconfiguration (wrong customer, unmapped SKUs), and a narrow window makes
 # that cheap to inspect and undo. Reach further back with `orders_sync_from`,
 # or with the manual backfill, once the first run looks right.
-ORDERS_DEFAULT_LOOKBACK_DAYS = 1
+ORDERS_DEFAULT_LOOKBACK_DAYS = 31
 
 # A backfill is walked in chunks: Amazon degrades badly on very wide
 # LastUpdatedAfter/Before windows for high-volume sellers.
