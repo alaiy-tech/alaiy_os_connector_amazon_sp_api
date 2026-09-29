@@ -25,15 +25,15 @@ the conflict instead of silently corrupting the downstream documents.
 """
 
 import time
-from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import timedelta
 
 import frappe
 from frappe import _
-from frappe.utils import add_to_date, cint, flt, get_datetime, get_system_timezone, now_datetime
+from frappe.utils import add_to_date, cint, flt, get_datetime, now_datetime
 
 from alaiy_os_connector_amazon_sp_api import connections
 
+from alaiy_os_connector_amazon_sp_api.spapi import times
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	ORDER_ITEMS_MIN_INTERVAL,
@@ -57,25 +57,12 @@ from alaiy_os_connector_amazon_sp_api.spapi.listings import _marketplace
 # Every crossing of that boundary goes through these two, so a timezone bug can
 # only ever live in one place — and on a site whose timezone isn't UTC, getting
 # this wrong silently shifts the whole sync window by hours.
-def _to_amazon_iso(dt):
-	"""System-time naive datetime -> '2026-08-03T09:15:00Z'."""
-	dt = get_datetime(dt)
-	if dt.tzinfo is None:
-		dt = dt.replace(tzinfo=ZoneInfo(get_system_timezone()))
-	return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _from_amazon_iso(value):
-	"""Amazon ISO-8601 UTC string -> naive system-time datetime (or None)."""
-	if not value:
-		return None
-	try:
-		parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-	except ValueError:
-		return None
-	if parsed.tzinfo is None:
-		parsed = parsed.replace(tzinfo=UTC)
-	return parsed.astimezone(ZoneInfo(get_system_timezone())).replace(tzinfo=None)
+#
+# They now live in spapi.times, because spapi.inventory needs the same
+# conversion and a second copy is exactly what the paragraph above rules out.
+# The private names stay as the local vocabulary of this module.
+_to_amazon_iso = times.to_amazon_iso
+_from_amazon_iso = times.from_amazon_iso
 
 
 def _window_end():

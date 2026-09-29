@@ -4,7 +4,9 @@ import type {
   AmazonCatalogMatch,
   AmazonCompareResult,
   AmazonConfigStatus,
+  AmazonConnectionConfig,
   AmazonConnectionStatus,
+  AmazonConnectionSummary,
   AmazonConsentUrl,
   AmazonDesiredListing,
   AmazonDraftListing,
@@ -140,9 +142,64 @@ async function post<T>(method: string, args: Record<string, unknown> = {}, fallb
 
 // ── connection ───────────────────────────────────────────────────────────────
 
+/**
+ * Every seller on this bench, for the switcher.
+ *
+ * Empty on a bench that has none, rather than a refusal: "no connection yet" is
+ * a state the settings screen draws, not one it fails on.
+ */
+export function listConnections(): Promise<AmazonConnectionSummary[]> {
+  return get<AmazonConnectionSummary[]>("list_connections", undefined, "Could not list the Amazon connections.");
+}
+
+/** Add a seller. The id becomes the docname, so it is the operator's to choose. */
+export function createConnection(args: {
+  connection_id: string;
+  label?: string;
+  region?: string;
+}): Promise<AmazonConnectionSummary> {
+  return post<AmazonConnectionSummary>("create_connection", args, "Could not add the Amazon connection.");
+}
+
+/** Which seller a call that names none resolves to — the scheduled jobs included. */
+export function setDefaultConnection(connection: string): Promise<AmazonConnectionSummary> {
+  return post<AmazonConnectionSummary>(
+    "set_default_connection",
+    { connection },
+    "Could not change the default connection.",
+  );
+}
+
+/**
+ * One connection's settings values.
+ *
+ * Not the platform's `fetchConnectorConfig`: that is keyed on connector_id and
+ * resolves the record itself, so on a bench with several sellers it answers
+ * about the default one — or refuses — whichever seller the screen is showing.
+ */
+export function fetchConnectionConfig(connection?: string): Promise<AmazonConnectionConfig> {
+  return get<AmazonConnectionConfig>(
+    "get_connection_config",
+    { connection },
+    "Could not read this connection's settings.",
+  );
+}
+
+/** Save one connection's settings and test them, the way `saveAndTestConnector` does. */
+export function saveConnection(
+  connection: string,
+  values: Record<string, unknown>,
+): Promise<AmazonTestResult & { connection: string }> {
+  return post<AmazonTestResult & { connection: string }>(
+    "save_connection",
+    { connection, values },
+    "Could not save the Amazon settings.",
+  );
+}
+
 /** Status, resolved region/endpoint and primary marketplace. Never the token. */
-export function fetchConnectionStatus(): Promise<AmazonConnectionStatus> {
-  return get<AmazonConnectionStatus>("get_connection_status", undefined, "Could not read the Amazon connection.");
+export function fetchConnectionStatus(connection?: string): Promise<AmazonConnectionStatus> {
+  return get<AmazonConnectionStatus>("get_connection_status", { connection }, "Could not read the Amazon connection.");
 }
 
 /** Which `site_config` keys are set, plus the redirect URI Amazon must know. */
@@ -157,8 +214,8 @@ export function fetchConfigStatus(): Promise<AmazonConfigStatus> {
  * minutes, and a tab left open over lunch would otherwise send the operator to a
  * consent screen that can only fail on the way back.
  */
-export function fetchConsentUrl(): Promise<AmazonConsentUrl> {
-  return get<AmazonConsentUrl>("get_consent_url", undefined, "Could not start the Amazon authorization.");
+export function fetchConsentUrl(connection?: string): Promise<AmazonConsentUrl> {
+  return get<AmazonConsentUrl>("get_consent_url", { connection }, "Could not start the Amazon authorization.");
 }
 
 /** Finish the round trip. Amazon's own query parameters, forwarded verbatim. */
@@ -172,14 +229,27 @@ export function completeOauth(params: {
   return post<AmazonOauthResult>("complete_oauth", params, "Could not complete the Amazon authorization.");
 }
 
+/**
+ * Make sure this site has a connection to configure, and say which.
+ *
+ * Called before the first save on a bench that has none. The platform's
+ * registry-driven save writes to whatever settings DocType a connector
+ * registered and cannot create its first row — `Amazon Connection` is named
+ * `field:connection_id`, which only this app knows. Creates nothing on a bench
+ * that already has a connection.
+ */
+export function ensureConnection(): Promise<{ connection: string }> {
+  return post<{ connection: string }>("ensure_connection", {}, "Could not set up the Amazon connection.");
+}
+
 /** Clear the stored refresh token. The register rows are left alone. */
-export function disconnectAmazon(): Promise<{ status: string }> {
-  return post<{ status: string }>("disconnect", {}, "Could not disconnect the Amazon account.");
+export function disconnectAmazon(connection?: string): Promise<{ status: string }> {
+  return post<{ status: string }>("disconnect", { connection }, "Could not disconnect the Amazon account.");
 }
 
 /** Re-run the connector's own test and update the registry's status with it. */
-export function testConnection(): Promise<AmazonTestResult> {
-  return get<AmazonTestResult>("test_connection", undefined, "Could not test the Amazon connection.");
+export function testConnection(connection?: string): Promise<AmazonTestResult> {
+  return get<AmazonTestResult>("test_connection", { connection }, "Could not test the Amazon connection.");
 }
 
 // ── marketplaces ─────────────────────────────────────────────────────────────
@@ -536,11 +606,11 @@ export function syncHealth(marketplace?: string): Promise<unknown> {
 
 // ── orders ───────────────────────────────────────────────────────────────────
 
-export function fetchOrdersSyncStatus(): Promise<AmazonOrdersSyncStatus> {
-  return get<AmazonOrdersSyncStatus>("get_orders_sync_status", undefined, "Could not read the order sync status.");
+export function fetchOrdersSyncStatus(connection?: string): Promise<AmazonOrdersSyncStatus> {
+  return get<AmazonOrdersSyncStatus>("get_orders_sync_status", { connection }, "Could not read the order sync status.");
 }
 
 /** Pull orders updated since the watermark into Sales Orders. Backgrounded. */
-export function syncOrders(marketplace?: string): Promise<AmazonQueued> {
-  return post<AmazonQueued>("sync_orders", { marketplace }, "Could not start the order sync.");
+export function syncOrders(marketplace?: string, connection?: string): Promise<AmazonQueued> {
+  return post<AmazonQueued>("sync_orders", { marketplace, connection }, "Could not start the order sync.");
 }

@@ -6,7 +6,7 @@ import frappe
 
 from alaiy_os_connector_amazon_sp_api import connections
 
-from alaiy_os_connector_amazon_sp_api.spapi import health, orders, reconcile, submissions
+from alaiy_os_connector_amazon_sp_api.spapi import health, inventory, orders, reconcile, submissions
 
 
 def _connection_ready():
@@ -92,6 +92,38 @@ def reconcile_submissions():
 			title="Amazon submission reconciliation failed", message=frappe.get_traceback()
 		)
 		_alert_managers("Amazon submission reconciliation failed")
+
+
+def sync_fba_inventory():
+	"""Every 6h: refresh what Amazon is holding, per seller.
+
+	Separate from the listing reconcile that runs on the same cadence, and not
+	folded into it, because the two fail independently: FBA inventory needs a
+	role a seller can be missing while every listing call works fine. A 403 here
+	must cost the stock figures and nothing else.
+	"""
+	_for_each_connection(
+		"FBA inventory sync",
+		lambda name: inventory.sync_inventory(connection=name),
+	)
+
+
+def refresh_catalog_facts():
+	"""Weekly: let the reconcile re-read catalog content for every enriched row.
+
+	This job makes no API call of its own. It clears `catalog_synced_at`, and the
+	six-hourly reconcile — which already batches, budgets and logs catalog reads —
+	does the fetching on its next run. One fetch path, not two.
+
+	Weekly is the cadence issue #64 asks for, and it is the right order of
+	magnitude for what these fields are: a browse-node move or a barcode
+	correction is a rare event, and re-reading a whole catalogue costs one call
+	per twenty ASINs.
+	"""
+	_for_each_connection(
+		"catalog refresh",
+		lambda name: reconcile.mark_catalog_stale(connection=name, older_than_days=7),
+	)
 
 
 def refresh_connection_status():

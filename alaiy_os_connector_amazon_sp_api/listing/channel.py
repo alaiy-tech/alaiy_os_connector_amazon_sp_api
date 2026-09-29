@@ -47,13 +47,19 @@ Defects come back through `save_listing` as a tool error, so the model reads the
 and fixes the listing rather than the run dying — and nothing is written until it
 passes.
 
-## No image step, for now
+## The image step
 
-The producing side — the white-background main tile, the translated gallery, the
-S3 store and the background render queue — has not moved across yet, so no
-`prepare_images` handler is declared. `get_channel_spec` reports
-`has_image_step: false` and the agent sets `images: []` and says so. Reading the
-product's existing photos is unaffected; that is `listing/images.py`.
+`listing/handlers.py` `prepare_images()` translates the gallery and, when
+`white_bg_images` is on, puts the main tile on a plain white background too —
+both via alphashop (`translate_image` / `white_background`, through
+`alaiy_os.engine.llm.image_client()`), chained on the main tile when both
+toggles are on. Runs synchronously, inline in the listing-agent's own
+already-queued run — there is no separate background render stage. If
+`white_bg_images` is off, the main tile is translated only (same as the
+gallery) and flagged in `needs_review` for a human to replace before
+publishing, since Amazon requires that tile on a plain white background.
+Reading the product's existing photos (what the model looks at, not what it
+produces) is unaffected; that is `listing/images.py`.
 """
 
 import json
@@ -99,7 +105,7 @@ def channel():
 			"validate": f"{_SELF}.validate",
 			"health": f"{_SELF}.health",
 			"register": f"{_SELF}.register",
-			# No "prepare_images" — see the module docstring.
+			"prepare_images": f"{_SELF}.prepare_images",
 		},
 	}
 
@@ -127,6 +133,14 @@ def save_listing(product, listing):
 	from alaiy_os_connector_amazon_sp_api.listing import handlers
 
 	return handlers.save_listing(listing=listing, sku=product)
+
+
+def prepare_images(product, translate=False, white_bg=False, generate=False, image_urls=None):
+	from alaiy_os_connector_amazon_sp_api.listing import handlers
+
+	return handlers.prepare_images(
+		product=product, translate=translate, white_bg=white_bg, generate=generate, image_urls=image_urls
+	)
 
 
 def register(product):

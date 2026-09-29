@@ -29,7 +29,12 @@ save_listing persists the finished enrichment into the Amazon Enriched Listing
 DocType in "Needs Review" status, for the admin to edit and approve.
 """
 
+import mimetypes
+from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
+
 import frappe
+from frappe.utils.file_manager import save_file
 
 from alaiy_os_connector_amazon_sp_api.listing import brand as brands
 from alaiy_os_connector_amazon_sp_api.listing import product_type as product_types
@@ -239,6 +244,249 @@ def resolve_image_plan(listing):
 	return image_plan(main=main, gallery=family, main_fallback=fallback)
 
 
+# ── the image step: translate the gallery, white-background the main tile ─────
+# Both go through alphashop, via the `ai_client` seam's `translate_image` and
+# `white_background`. `white_bg_images` only ever applies to the main tile --
+# see `_ops_for` -- chained after translation when both toggles are on. If
+# `white_bg_images` is off, the main image is translated only and flagged in
+# `needs_review` rather than silently shipped as non-compliant, since Amazon
+# requires the main tile on a plain white background.
+
+# How many photos are translated at once. Paid third-party calls, in parallel,
+# capped so a listing with a big gallery does not fire them all simultaneously.
+_TRANSLATE_CONCURRENCY = 4
+
+_REUSED_NOTE = "Processed on an earlier run; reused rather than paid for again."
+_NO_EXTRACT_NOTE = (
+	"white_bg_images was off, so the main image was only translated, not placed "
+	"on a white background. Amazon requires the main image on a plain white "
+	"background -- replace it before publishing, or re-run with white_bg_images on."
+)
+
+# ops tuple <-> the `kind` column, so gate 3 can tell "translated" apart from
+# "translated and put on a white background" and redo only what changed.
+_OPS_KIND = {
+	("translate",): "translated",
+	("white_bg",): "white_bg",
+	("translate", "white_bg"): "translated_white_bg",
+}
+_KIND_OPS = {v: k for k, v in _OPS_KIND.items()}
+
+
+def _ops_for(role, translate, white_bg):
+	"""Which operations apply to a target of this role, in the order they run.
+
+	White background only ever applies to the main tile -- Amazon's rule is
+	about the one tile shoppers see in search, not the gallery -- so a gallery
+	target's ops never include it regardless of the toggle.
+	"""
+	ops = []
+	if translate:
+		ops.append("translate")
+	if white_bg and role == "main":
+		ops.append("white_bg")
+	return tuple(ops)
+
+
+def _already_processed(sku):
+	"""{(source_url, role, ops): url} for (photo, role, operations) an earlier
+	run already produced.
+
+	Keyed on ops as well as role and url: turning white_bg_images on for a main
+	image already translated must redo the compositing rather than reuse the
+	translate-only result as if it were done.
+	"""
+	if not sku or not frappe.db.exists(ENRICHED_DOCTYPE, sku):
+		return {}
+	rows = frappe.get_all(
+		"Amazon Enriched Listing Image",
+		filters={"parent": sku, "parenttype": ENRICHED_DOCTYPE},
+		fields=["source_url", "role", "url", "kind"],
+	)
+	return {
+		(row.source_url, row.role or "gallery", _KIND_OPS[row.kind]): row.url
+		for row in rows
+		if row.source_url and row.url and row.kind in _KIND_OPS
+	}
+
+
+def _process_one(client, public_url, ops):
+	"""One photo, off the main thread. Returns (content, media_type, error).
+
+	Runs `ops` IN ORDER on the same url, chaining each step's output into the
+	next: translate first, then white-background the translated result, never
+	the reverse -- a main image needing both should end up with English text
+	on a white background, not either op undoing the other's work. Only
+	network calls happen here: `translate_image` / `white_background`
+	(thread-safe by the client's own contract) and fetching the final result's
+	bytes ourselves, both plain `requests` calls with no Frappe binding.
+	`public_url` must already be resolved -- a local File path needs
+	`frappe.utils.get_url`, which reads site config that is not available
+	inside a worker thread, so `images.public_image_url` is called on the main
+	thread before the pool starts. Saving a File needs the same request
+	context, so that also happens back on the main thread once every photo in
+	the batch has come back. The provider's own url is never returned to the
+	caller -- its docstring says it may expire.
+	"""
+	try:
+		url = public_url
+		if "translate" in ops:
+			result = client.translate_image(url)
+			url = result.get("translated_url") or result.get("url") or result.get("image_url")
+			if not url:
+				return None, None, "the translation service returned no url"
+		if "white_bg" in ops:
+			result = client.white_background(url)
+			url = result.get("white_bg_url") or result.get("url")
+			if not url:
+				return None, None, "the white-background service returned no url"
+		content, mime = images.fetch_image_bytes(url)
+		return content, mime, None
+	except Exception as exc:
+		return None, None, str(exc)
+
+
+def _rehost(sku, role, content, mime):
+	"""Save a processed photo as a public File, so its url outlives the provider's.
+
+	Must run on the main thread -- see `_process_one`. Not attached to the
+	Amazon Enriched Listing doctype/name (`dt`/`dn` left blank): the enriched
+	listing may not exist yet the first time this runs, since `save_listing`
+	hasn't been called yet in the same agent turn.
+	"""
+	ext = mimetypes.guess_extension(mime) or ".jpg"
+	file_name = f"listing-{sku or 'url'}-{role}-{uuid4().hex}{ext}"
+	return save_file(file_name, content, None, None, is_private=0).file_url
+
+
+def prepare_images(product, translate=False, white_bg=False, generate=False, image_urls=None):
+	"""Translate and/or white-background a listing's photos for Amazon.
+
+	`product` is the seller sku; `translate`/`white_bg` are the per-request
+	opt-in toggles, relayed verbatim by the shared listing agent's
+	`prepare_images` tool -- independent of each other, and white_bg only ever
+	applies to the main tile (see `_ops_for`). `generate` (AI retouch) has no
+	equivalent on this channel and is accepted but ignored. `image_urls` only
+	applies to a URL-only product with no listing record.
+
+	Returns {"images": [{role, kind, source_url, url, note}, ...], "note": str}.
+	The FIRST entry is always the main image, the rest are the family gallery in
+	order -- see `resolve_image_plan`. This runs synchronously, inside the
+	already-queued listing-agent job (`execute_agent` enqueues the whole run), so
+	there is no separate background stage: whatever this returns is final.
+	"""
+	if product and frappe.db.exists(LISTING_DOCTYPE, product):
+		plan = resolve_image_plan(get_listing(product))
+	else:
+		urls = [u for u in (image_urls or []) if u]
+		plan = image_plan(main=urls[0] if urls else None, gallery=urls[1:])
+
+	if not plan["targets"]:
+		return {
+			"images": [],
+			"note": (
+				"This listing has no photos, so nothing was prepared -- this step only "
+				"ever processes an existing photograph, and never creates product "
+				"imagery from scratch."
+			),
+		}
+
+	if not translate and not white_bg:
+		return {
+			"images": [],
+			"note": (
+				"The listing has photos, but translate_images and white_bg_images are "
+				"both off, so no images were processed."
+			),
+		}
+
+	from alaiy_os.engine import llm
+
+	client = llm.image_client()
+	support = client.image_support()
+	if translate and not support.get("translate"):
+		frappe.throw(
+			"Image translation is not available on this site (the active AI client "
+			"cannot translate images). Do NOT retry; return each image with url=null "
+			"so the team can prepare them manually."
+		)
+	if white_bg and not support.get("white_bg"):
+		frappe.throw(
+			"White background is not available on this site (the active AI client "
+			"cannot do this). Do NOT retry; return each image with url=null so the "
+			"team can prepare them manually."
+		)
+
+	for target in plan["targets"]:
+		target["ops"] = _ops_for(target["role"], translate, white_bg)
+
+	done = _already_processed(product)
+	targets = [
+		dict(t, url=done.get((t["source_url"], t["role"], t["ops"]))) for t in plan["targets"]
+	]
+	todo = [t for t in targets if t["ops"] and not t["url"]]
+
+	fresh = {}
+	if todo:
+		# Resolved here, on the main thread -- see `_process_one`.
+		public_urls = [images.public_image_url(t["source_url"]) for t in todo]
+		with ThreadPoolExecutor(max_workers=min(_TRANSLATE_CONCURRENCY, len(todo))) as pool:
+			outcomes = list(
+				pool.map(lambda pair: _process_one(client, pair[1], pair[0]["ops"]), zip(todo, public_urls))
+			)
+		for target, (content, mime, error) in zip(todo, outcomes, strict=True):
+			key = (target["source_url"], target["role"], target["ops"])
+			if error:
+				fresh[key] = (None, f"Image preparation failed: {error}"[:200])
+				continue
+			# Back on the main thread: saving a File needs Frappe's request context.
+			fresh[key] = (_rehost(product, target["role"], content, mime), None)
+
+	# Every target with ops is either freshly processed above (`todo`) or already
+	# had a url from an earlier run (`done`); a target with no ops (white_bg off
+	# and it's a gallery role that never gets it, or both toggles off for it) is
+	# neither.
+	images_out = []
+	for target in targets:
+		key = (target["source_url"], target["role"], target["ops"])
+		if key in fresh:
+			url, note = fresh[key]
+			if not note and target["role"] == "main" and target["ops"] == ("translate",):
+				note = _NO_EXTRACT_NOTE
+		elif target["url"]:
+			url, note = target["url"], _REUSED_NOTE
+		else:
+			url, note = None, "No image operation was requested for this photo."
+		images_out.append({
+			"role": target["role"],
+			"kind": _OPS_KIND.get(target["ops"]),
+			"source_url": target["source_url"],
+			"url": url,
+			"note": note,
+		})
+
+	notes = [
+		"The FIRST entry is the main image and the rest are the gallery, in order. "
+		"Copy them verbatim, in this order, with each entry's `role`."
+	]
+	if plan.get("main_fallback"):
+		notes.append(
+			"This variant has no dedicated variant image, so the family's first photo "
+			"was used as the main image. Add 'Main image (no variant photo)' to "
+			"needs_review and say so in notes."
+		)
+	if images_out and images_out[0]["note"] == _NO_EXTRACT_NOTE:
+		notes.append(
+			"The main image was translated but not placed on a white background. Add "
+			"'Main image background' to needs_review and say so in notes."
+		)
+	failed = sum(1 for img in images_out if not img["url"] and img["kind"])
+	if failed:
+		notes.append(f"{failed} photo(s) failed to process and were left with url=null.")
+
+	return {"images": images_out, "note": " ".join(notes)}
+
+
 def get_listing(sku):
 	"""The Amazon Product Listing for `sku`, or throw a useful message."""
 	if not frappe.db.exists(LISTING_DOCTYPE, sku):
@@ -317,6 +565,17 @@ def get_product(sku):
 	reported, never looked up: classification runs on the enriched title at save
 	time, for every listing, because the product type has to match the copy that
 	will actually be published (see product_type.py).
+
+	`brand` is reported for the opposite reason to `product_type`: it is an INPUT to
+	the copy, not a consequence of it. An Amazon title opens with the brand name
+	(`Brand Keyword | Type / Material | …`), so a run that learns the brand only at
+	save time has already written a title built on a different one. A row whose brand
+	was assigned when it was drafted — a product sourced from a supplier and put on
+	the register by `draft_listing` — is therefore telling the model which brand to
+	write under, and `_save_brand` holds it to that. A row synced from Amazon carries
+	Amazon's own brand here instead, which is equally the right thing to write under:
+	brand is set when the ASIN is created and Amazon will not take it as an offer
+	update, so the published brand is not the enrichment's to change either way.
 	"""
 	listing = get_listing(sku)
 
@@ -324,6 +583,7 @@ def get_product(sku):
 		"sku": listing.name,
 		"title": listing.get("title"),
 		"asin": listing.get("asin"),
+		"brand": listing.get("brand"),
 		"item_code": listing.get("product"),
 		"marketplace": listing.get("marketplace"),
 		"product_type": product_types.existing(listing),
@@ -535,8 +795,8 @@ def _save_product_type(doc, source_listing):
 	doc.needs_review = "\n".join(filter(None, [doc.needs_review, flag]))
 
 
-def _save_brand(doc, listing):
-	"""Assign the house brand the model decided this product belongs under.
+def _save_brand(doc, listing, source_listing=None):
+	"""Assign the house brand this product sells under.
 
 	Lives on this enrichment record only -- see `_push_to_listing` in
 	amazon_enriched_listing.py, which deliberately never writes it to the
@@ -552,12 +812,48 @@ def _save_brand(doc, listing):
 	(`brand.is_configured()`) -- a deployment with none registered has nothing
 	to say about brand, and nagging every listing about a field that
 	deployment doesn't use would train reviewers to ignore the flag.
+
+	**An assigned brand on the register row wins.** The paragraph above still
+	describes every row that arrives without one, which is every row synced from
+	Amazon that Amazon holds no brand for. But a row drafted by a sourcing flow --
+	`draft_listing` takes a brand, and a batch pulled from one supplier category is
+	pulled *because* it belongs to a house brand -- already carries the answer, and
+	the answer is the caller's to give rather than the model's to guess. The
+	classifier is not consulted for those rows: `get_product` reported the brand, the
+	prompt told the model to write under it, and holding the saved field to the same
+	value is what stops a title opening with one brand and the record naming another.
+
+	It is also the value that reaches Amazon. `_catalog_attributes` sends
+	`row.get("brand")` when the ASIN is created, and `_identifier_attributes` reads it
+	again to claim a GTIN exemption -- so on a new ASIN the brand assigned here is
+	published, permanently, and Amazon will not accept it as a later offer update.
+	That is the whole reason forcing it is worth the coupling.
+
+	The model's own pick is kept either way: `output_json` holds the raw enrichment,
+	and a disagreement is flagged for the reviewer rather than silently discarded.
 	"""
 	valid = brands.valid_brands()
 	if not valid:
 		return
 
 	candidate = (listing.get("brand") or "").strip()
+	assigned = ((source_listing or {}).get("brand") or "").strip()
+
+	if assigned in valid:
+		doc.brand = assigned
+		if candidate and candidate != assigned:
+			doc.needs_review = "\n".join(
+				filter(
+					None,
+					[
+						doc.needs_review,
+						f"Brand (this listing is assigned to '{assigned}', but the copy was "
+						f"classified as '{candidate}' -- check the title opens with '{assigned}')",
+					],
+				)
+			)
+		return
+
 	doc.brand = candidate if candidate in valid else None
 	if not doc.brand:
 		doc.needs_review = "\n".join(
@@ -621,7 +917,7 @@ def save_listing(listing, sku=None):
 
 	source_listing = get_listing(sku)
 	_save_product_type(doc, source_listing)
-	_save_brand(doc, listing)
+	_save_brand(doc, listing, source_listing)
 
 	# the ordered content -> pretty JSON; whole payload kept verbatim for audit
 	doc.bullets_json = frappe.as_json(listing.get("bullet_points") or [])
@@ -673,18 +969,18 @@ def save_listing(listing, sku=None):
 			"note": img.get("note"),
 		})
 
-	# There is no image step on this channel yet — the producing side has not moved
-	# across from the retired agent pack — so `images` arrives empty and this lands
-	# on "Not Required" every time. The other two branches are kept rather than
-	# deleted because they are the contract the step will slot back into: a row with
-	# no url is one it queued and will render in the background, and one that
-	# already has a url was reused from an earlier run. Recomputed on every save.
-	if any(not row.url for row in doc.images):
-		doc.image_status = "Queued"
-	elif doc.images:
-		doc.image_status = "Ready"
-	else:
+	# `images` is empty when prepare_images was off or the listing had no photos,
+	# which lands on "Not Required". Processing is synchronous now — nothing is
+	# left to run in the background — so a row with no url is a photo that failed
+	# to translate this run, not one still queued. Recomputed on every save.
+	if not doc.images:
 		doc.image_status = "Not Required"
+	elif all(row.url for row in doc.images):
+		doc.image_status = "Ready"
+	elif any(row.url for row in doc.images):
+		doc.image_status = "Partial"
+	else:
+		doc.image_status = "Failed"
 	doc.image_error = None
 
 	# Permission-checked, deliberately. This runs as whoever asked for the

@@ -59,9 +59,46 @@ operations. No SP-API calls are ever made from the browser.
 | **Amazon Marketplace** | Reference list of Amazon marketplaces and their IDs. |
 | **Amazon Product Listing** | Register of managed listings and their state. |
 | **Amazon Listing Issue** | Issues reported by Amazon against a listing. |
+| **Amazon FBA Inventory** | What Amazon is holding per seller SKU: fulfillable, inbound, reserved, unfulfillable. |
 | **Account Health Metric** | Synced account-health metrics per marketplace. |
 | **Seller Feedback** | Recent seller feedback pulled from Amazon. |
 | **SP-API Log** | Audit log of every SP-API request/response. |
+
+#### FBA stock is not the quantity on the listing
+
+A listing's `fulfillmentAvailability` is the quantity **the seller declared**,
+which for an FBA SKU is nothing — Amazon is counting for them. Read as stock it
+reports zero for a product with a pallet in a fulfilment centre, and it does it
+without erroring. **Amazon FBA Inventory** is the real figure, from the FBA
+Inventory API, and it is five figures rather than one:
+
+| Quantity | Means |
+| --- | --- |
+| `fulfillable_qty` | Sellable today. The only one that is stock for a reorder decision. |
+| `inbound_qty` | Working + shipped + receiving. Bought, not yet sellable. |
+| `reserved_qty` | Present, already allocated to placed orders. |
+| `unfulfillable_qty` | Damaged or expired. Never sellable again. |
+| `total_qty` | Amazon's own sum of all of the above. Reported, never treated as stock. |
+
+Days of cover divides `fulfillable_qty`. Using `total_qty` reads healthy right
+up to the stockout, because the units it counts are on a truck.
+
+This call needs the **Amazon Fulfilment** role, which is separate from the
+listings role — a seller can be fully connected and still 403 here, which is why
+it is its own job.
+
+#### Barcode and category come from the catalog, not the listing
+
+A listing's `externally_assigned_product_identifier` attribute is populated only
+for a seller who **created** the ASIN. For a reseller it is simply absent, so a
+catalogue matched on it matches nothing while looking exactly like a matcher
+that ran. The barcode and the browse-node ancestry are catalog facts, fetched
+via `includedData=identifiers,classifications` and applied fill-only.
+
+`spapi.catalog.identifiers_from` returns **every** identifier, not just the
+stored pick: Amazon commonly holds both an EAN and the UPC inside it —
+`0819752013274` and `819752013274` are the same barcode and are not equal as
+strings — so anything matching across channels should compare the full list.
 
 #### Product type
 
@@ -224,6 +261,7 @@ All operations run server-side through whitelisted methods in
 | `get_connect_url` / `disconnect` | Start OAuth for a named connection / clear its stored token. |
 | `ping` / `test_connection` | Verify the connection via a preflight. |
 | `sync_health` / `get_health_summary` | Sync and read account-health metrics + feedback. |
+| `sync_fba_inventory` / `get_fba_inventory` | Refresh and read FBA stock. Scoped to one connection, lowest fulfillable first. |
 | `search_catalog` | Search the Amazon catalog for an ASIN + product type. |
 | `suggest_product_type` | Resolve a product title to Amazon product types, best match first. |
 | `create_listing` / `update_listing` / `delete_listing` | Manage offers for a SKU. |
@@ -330,6 +368,8 @@ cleanly when the connection is not configured.
 | Daily | `sync_health` | Refresh account-health metrics + feedback for the primary marketplace. |
 | Hourly | `refresh_connection_status` | Ping preflight and update `last_status`. |
 | Every 6h | `reconcile_listings` | Reconcile the full catalog's status/price/quantity from the Merchant Listings report. |
+| Every 6h (offset 30m) | `sync_fba_inventory` | Refresh FBA stock. Its own job because it needs a separate Amazon role. |
+| Weekly | `refresh_catalog_facts` | Marks catalog content stale so the reconcile re-reads barcodes and categories. Makes no API call itself. |
 | Every 10m | `sync_orders` | Pull orders updated since the watermark into Sales Orders. Dormant until a Default Customer is set. |
 
 On a scheduled failure, users with the **Amazon Manager** role receive a

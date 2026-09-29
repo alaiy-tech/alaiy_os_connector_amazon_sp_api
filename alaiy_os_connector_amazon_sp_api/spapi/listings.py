@@ -836,6 +836,7 @@ def _upsert_from_item(
 
 	_apply_content(row, mp, item, summary, catalog_content=catalog_content)
 	_apply_variation(row, catalog_content)
+	_apply_catalog_facts(row, catalog_content)
 
 	row.flags.ignore_permissions = True
 	row.save(ignore_permissions=True)
@@ -1114,6 +1115,49 @@ def _apply_variation(row, catalog_content):
 	row.parent_listing = _listing_for_asin(parent_asin, marketplace=row.get("marketplace"))
 	row.variation_theme = catalog_content.get("variation_theme") or None
 	row.is_variation_parent = 1 if catalog_content.get("is_variation_parent") else 0
+
+
+def _apply_catalog_facts(row, catalog_content):
+	"""Record the barcode and the browse-node ancestry the catalog reported.
+
+	Fill-only, like content and unlike parentage. The distinction is the same one
+	_apply_content draws, and it matters more here than anywhere:
+
+	  * `product_id` is the barcode `create_asin` submits as
+	    externally_assigned_product_identifier. A catalog batch that failed, or an
+	    ASIN whose classifications came back empty, must not blank it — an
+	    operator would find a listing that could no longer be created and nothing
+	    in the log saying a *read* did it.
+	  * A recategorised ASIN therefore keeps a stale category until the catalog
+	    answers with a new one. That is the trade this takes deliberately: stale
+	    beats absent for a field a roll-up groups by, and absent is what blanking
+	    on a failed look-up would produce on every sync that hiccupped.
+
+	Unlike content, this reads the catalog entry alone and never the seller's own
+	`externally_assigned_product_identifier`. The two state the same barcode, and
+	the attribute is populated only for a seller who created the ASIN — so
+	consulting it first would change nothing for those sellers and answer nothing
+	for every reseller.
+	"""
+	if not catalog_content:
+		return
+
+	if catalog_content.get("product_id"):
+		row.product_id = catalog_content["product_id"]
+		# The doctype's Select only knows these four; an identifier of some other
+		# type is stored without one rather than rejected on save.
+		kind = catalog_content.get("product_id_type")
+		if kind in ("EAN", "UPC", "GTIN", "ISBN"):
+			row.product_id_type = kind
+
+	if catalog_content.get("category_l1"):
+		row.amazon_category_l1 = catalog_content["category_l1"]
+		# L2 and L3 move with L1 or not at all: a product that went from a
+		# three-level chain to a two-level one would otherwise keep an L3 from the
+		# category it left, which reads as a real leaf and is not one.
+		row.amazon_category_l2 = catalog_content.get("category_l2")
+		row.amazon_category_l3 = catalog_content.get("category_l3")
+		row.amazon_browse_node_id = catalog_content.get("browse_node_id")
 
 
 def variation_family(parent_asin, marketplace=None):
@@ -1851,7 +1895,7 @@ def draft_listing(
 # rejected later.
 
 
-def _gtin_exempt_brands():
+def _gtin_exempt_brands(connection=None):
 	"""Brands the operator has recorded a GTIN exemption for, casefolded.
 
 	Amazon grants the exemption in Seller Central, per brand, and exposes no API
@@ -1859,12 +1903,16 @@ def _gtin_exempt_brands():
 	brand here says the grant was obtained. A brand named without it gets the
 	submission rejected, which is the honest failure — better than refusing to
 	submit at all and making the exemption unusable.
+
+	The exemption is per seller, so the connection has to be threaded down here
+	rather than resolved from nothing: on a multi-seller bench, reading the wrong
+	seller's list would declare an exemption its owner never obtained.
 	"""
 	raw = connections.resolve(connection).gtin_exempt_brands or ""
 	return {line.strip().casefold() for line in raw.splitlines() if line.strip()}
 
 
-def _identifier_attributes(mp, row):
+def _identifier_attributes(mp, row, connection=None):
 	"""How Amazon is to identify this product: a barcode, or an exemption.
 
 	One of the two is mandatory for a catalog entry and they are mutually
@@ -1885,7 +1933,7 @@ def _identifier_attributes(mp, row):
 			]
 		}
 	brand = _clean_text(row.get("brand"))
-	if brand and brand.casefold() in _gtin_exempt_brands():
+	if brand and brand.casefold() in _gtin_exempt_brands(connection):
 		return {
 			"supplier_declared_has_product_identifier_exemption": [
 				{"marketplace_id": mp.marketplace_id, "value": True}
@@ -1919,7 +1967,7 @@ def _extra_attributes(row):
 	return blob
 
 
-def _catalog_attributes(mp, row):
+def _catalog_attributes(mp, row, connection=None):
 	"""Every attribute a new-ASIN submission carries, product first then offer."""
 	attrs = {
 		"condition_type": [
@@ -1947,7 +1995,7 @@ def _catalog_attributes(mp, row):
 		attrs["fulfillment_availability"] = _availability_attribute(
 			row.get("quantity"), row.get("fulfillment_channel")
 		)
-	identifier = _identifier_attributes(mp, row)
+	identifier = _identifier_attributes(mp, row, connection)
 	if identifier:
 		attrs.update(identifier)
 	# Last, so an operator can correct anything above by naming it explicitly.
@@ -2083,18 +2131,22 @@ def _missing_attribute_blocker(row, schema, name):
 	)
 
 
-def preview_asin_creation(sku, marketplace=None):
+def preview_asin_creation(sku, marketplace=None, connection=None):
 	"""What creating this product on Amazon would submit, without submitting it.
 
 	One definitions call (cached) and no write. `blockers` is the whole answer for
 	a row that cannot go; `attributes` is what would be sent for one that can, so
 	the operator agrees to a payload rather than to a button.
+
+	Takes a connection for one reason: the payload can contain a GTIN exemption,
+	which is granted per seller. A preview that resolved a different seller's
+	exemptions would show an operator a payload Amazon will not accept from them.
 	"""
 	row = _register_row(sku)
-	mp = _marketplace(marketplace or row.get("marketplace"))
+	mp = _marketplace(marketplace or row.get("marketplace"), connection=connection)
 	product_type = row.get("product_type")
 	schema = product_types.get_definition(product_type, marketplace=mp.name) if product_type else None
-	attributes = _catalog_attributes(mp, row) if product_type else {}
+	attributes = _catalog_attributes(mp, row, connection) if product_type else {}
 	blockers = asin_create_blockers(row, attributes, schema)
 	return {
 		"sku": sku,
@@ -2149,7 +2201,7 @@ def create_asin(sku, marketplace=None):
 	mp = _marketplace(marketplace or row.get("marketplace"))
 	product_type = row.get("product_type")
 	schema = product_types.get_definition(product_type, marketplace=mp.name) if product_type else None
-	attributes = _catalog_attributes(mp, row) if product_type else {}
+	attributes = _catalog_attributes(mp, row, conn) if product_type else {}
 
 	blockers = asin_create_blockers(row, attributes, schema)
 	if blockers:

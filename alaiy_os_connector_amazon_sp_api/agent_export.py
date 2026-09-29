@@ -1,13 +1,40 @@
 # Copyright (c) 2026, Alaiy and contributors
 # For license information, please see license.txt
-"""Registration metadata for alaiy_os's OS Agent Registry — this connector's pack.
+"""What an agent may ask this connector, and the tools that answer.
 
 `connector_meta.py` registers the connector: what it is, how to test it, which
-sync slots it fills. This registers what an agent may *ask* it, in the same
-shape and on the same schedule — one `OS Agent Registry` row whose `tools` child
-rows name this app's whitelisted entry points as dotted-path handlers. The
-upsert lives beside the connector one, in setup/install.py, and runs on every
-`bench migrate`.
+sync slots it fills. This declares what an agent may *ask* it — a description, a
+set of tools naming this app's whitelisted entry points as dotted-path handlers,
+and the Amazon facts that govern how the answers are read.
+
+It is an export, not an agent. `alaiy_os_agents` reads it through the
+`connector_agents` hook and builds the agent around it: the model, the turn
+budget, the prompt structure and the reply contract are decided there, once, for
+every connector on the bench. This file no longer names a model or a turn budget,
+and `setup/install.py` no longer writes an `OS Agent Registry` row — that whole
+lifecycle, including the uninstall, moved with it.
+
+This is the same direction `listing_channels` already points. There is ONE agent
+per connector and it is built by the app that owns agents; the connector supplies
+the channel knowledge and nothing else. A bench without `alaiy_os_agents` simply
+never reads the hook, and this connector works exactly as it does today minus the
+ability to be asked questions.
+
+## What `rules` is for
+
+`prompts/rules.md` is the part of the old pack prompt that survived, and the test
+of what belongs there is whether a single tool description could hold it. Most
+could not: revenue here is gross merchandise value and never a payout, which is
+true of seven tools at once; Amazon's live figure and the synced one disagree for
+reasons that belong to neither tool alone; a zero for a month the sync never
+reached means no data rather than no sales. Those are facts about Amazon, and
+they go in one place rather than being copied into five descriptions that then
+drift apart.
+
+What did *not* survive is everything the shared prompt now says — that the agent
+answers from its tools rather than memory, that an empty result is an answer,
+that it covers this channel alone and cannot see another. Saying those again here
+would be two sources for one rule.
 
 ## The handlers are api.py, deliberately, not spapi/
 
@@ -36,11 +63,13 @@ They read Amazon Product Listing rows, so they are as fresh as each row's
 None of the Listings writes — create_listing, update_listing, delete_listing, and
 the publish_listing / publish_listings pair over them — is registered, and the
 reason is sequencing rather than taste.
-`OS Agent Tool` has no `effect` field yet, so nothing in the row can tell an
-orchestrator that a tool publishes; there is no per-tool toggle layer, so a site
-cannot switch one off; and the Listings write path carries no idempotency key, so
-a retry after a timeout can publish twice. Registering them now would hand an
-agent a publish button that no one chose to grant and nothing can take away.
+`OS Agent Tool` has since gained an `effect` field, so a row *can* now say that a
+tool publishes, and `chat/tools.py` keeps a `write` off the directly-callable
+surface on the strength of it. The other two reasons stand unchanged: there is no
+per-tool toggle layer, so a site cannot switch one off; and the Listings write
+path carries no idempotency key, so a retry after a timeout can publish twice.
+Registering them now would still hand an agent a publish button that no one chose
+to grant and nothing can take away.
 
 What that costs is small, because `compare_listing` is the whole of the useful
 half: it reports exactly what a push would change, and submits nothing. The pack
@@ -121,16 +150,16 @@ person goes to do them. A pack that reports a problem and cannot say where to fi
 it is asking to be re-asked.
 """
 
-import json
 from pathlib import Path
 
 _APP = "alaiy_os_connector_amazon_sp_api"
 _APP_DIR = Path(__file__).resolve().parent
 
-# The OS Agent Registry primary key, and what OS Agent Run records per run.
-PACK_ID = "amazon_sp_api"
-PACK_NAME = "Amazon (SP-API)"
-PACK_ICON = "shopping-cart"
+# The OS Agent Registry primary key, and what OS Agent Run records per run. Also
+# the slug `/amazon_sp_api` and the name `run_agent` is handed in Ask Alaiy.
+AGENT_ID = "amazon_sp_api"
+AGENT_NAME = "Amazon (SP-API)"
+AGENT_ICON = "shopping-cart"
 
 # The OS Connector Registry id from connector_meta. Every tool row carries it, so
 # factory.py refuses to build this pack while the connector is disabled — see the
@@ -151,21 +180,23 @@ DESCRIPTION = (
 	"merchandise value rather than a payout, because Amazon's fees are not mapped."
 )
 
-# Left at the registry's own default. A cheaper model would do for the two
-# straight reads, but choosing an Amazon product type from a title is a judgment
-# call that a later publish depends on, and getting it wrong is not visible until
-# Amazon rejects the submission.
-MODEL = "claude-sonnet-5"
-
-# The longest real chain is now a sales one, and it is longer than the register
-# one it replaces. "How did the blue kettle do last month, and is that better
-# than the month before" is list_listings -> get_product_sales ->
-# compare_sales_periods -> get_listing_link, and a two-source answer costs a
-# further get_orders_sync_status and get_amazon_order_metrics before the reply:
-# seven. Sixteen leaves that room plus a second page and one wrong turn, without
-# allowing a walk through the whole register or a year of daily buckets one call
-# at a time.
-MAX_TURNS = 16
+# The model and the turn budget are no longer set here — `alaiy_os_agents`'
+# `agents/connector/meta.py` decides both, once, for every connector agent on the
+# bench. Two notes worth carrying across, because they were the reasons for the
+# numbers this app used to assert:
+#
+#   * Most of what this export answers is a straight read, but choosing an Amazon
+#     product type from a title is a judgment call that a later publish depends
+#     on, and getting it wrong is not visible until Amazon rejects the
+#     submission. If the shared model ever proves too weak for anything here,
+#     that is the tool it will show up on first.
+#
+#   * The longest real chain is a sales one: "how did the blue kettle do last
+#     month, and is that better than the month before" is list_listings ->
+#     get_product_sales -> compare_sales_periods -> get_listing_link, and a
+#     two-source answer costs a further get_orders_sync_status and
+#     get_amazon_order_metrics before the reply. Seven, so the shared budget has
+#     to stay above that with room for one wrong turn.
 
 _API = f"{_APP}.api"
 
@@ -1051,52 +1082,55 @@ def read_text(relpath):
 	return (_APP_DIR / relpath).read_text(encoding="utf-8")
 
 
-def build_pack_meta():
-	"""The OS Agent Registry row this app asserts, as a dict of its fields.
+def export():
+	"""What this connector hands `alaiy_os_agents` through the `connector_agents` hook.
 
-	`run_as_user` is absent on purpose. The executor pins it when set and falls
-	back to Administrator when it is not, and Administrator holds System Manager,
-	so `_require_manager()` passes — the gates on api.py only bite once a site
-	names a narrower user here. That is the right default for a read-only pack and
-	the wrong one the moment a write tool is added, so the two decisions belong
-	together.
+	Everything here is Amazon knowledge. What is deliberately absent is everything
+	that is not: no model, no turn budget, no prompt structure, no reply contract,
+	no `OS Agent Registry` write. Those were this file's until the agent moved, and
+	a connector setting any of them again is the drift this export exists to stop.
+
+	`run_as_user` is absent for the reason it always was, and the reason still
+	holds. The executor pins it when set and falls back to Administrator when it is
+	not, and Administrator holds System Manager, so `_require_manager()` passes —
+	the gates on api.py only bite once a site names a narrower user. That is the
+	right default while every tool here is a read, and the wrong one the moment a
+	write is added, so the two decisions belong together.
 
 	`export_csv` is a write and does not move that line, because of what it writes:
 	a private File, owned by whoever the run reads as, out of rows that run already
 	read. Under the Administrator fallback that is an Administrator-owned private
 	file — visible to the operator who asked, and to nobody the reads were not
 	already visible to. A site that names a narrower Run As User gets a narrower
-	file owner and the File create gate starts biting, which is the same
-	relationship every other tool here has with that field.
+	file owner and the File create gate starts biting.
 
-	`output_format` stays Text: this pack answers a person. It gets an
-	`output_schema` when another pack consumes its result — a typed handoff is for
-	pack-to-pack, and prose is right at the leaf.
+	No `input_schema`. The agent takes a task and nothing else, and `marketplace`
+	is the parameter it might look like it wants — see the note above `TOOLS` for
+	why no schema in this file offers one. A model given a `marketplace` field with
+	nothing to populate it from invents an Amazon marketplace id, and every tool
+	here already falls through to the connection's primary marketplace, which is
+	what the Desk surfaces do too.
 	"""
 	return {
-		"agent_id": PACK_ID,
-		"agent_name": PACK_NAME,
+		"agent_id": AGENT_ID,
+		"label": AGENT_NAME,
+		"icon": AGENT_ICON,
 		"description": DESCRIPTION,
-		"icon": PACK_ICON,
-		"model": MODEL,
-		"max_turns": MAX_TURNS,
-		"system_prompt": read_text("prompts/pack.md"),
-		"output_format": "Text",
-		"tools": TOOLS,
+		"rules": read_text("prompts/rules.md"),
+		"tools": [_export_tool(tool) for tool in TOOLS],
 	}
 
 
-def as_registry_tool(tool):
-	"""One manifest tool as its OS Agent Tool child row, with the JSON as text."""
-	return {
-		"tool_id": tool["tool_id"],
-		"description": tool["description"],
-		"handler": tool["handler"],
-		"connector": CONNECTOR_ID,
-		"parameters_schema": json.dumps(tool["parameters_schema"], indent=1),
-		"required_permissions": (
-			json.dumps(tool["required_permissions"], indent=1)
-			if tool["required_permissions"]
-			else None
-		),
-	}
+def _export_tool(tool):
+	"""One tool, with the connector stamped on it.
+
+	`connector` is added here rather than written out on all seventeen rows, and it
+	is what makes `engine/factory.py` refuse to build the agent while this
+	connector is disabled. The reasoning for stamping every row — including the two
+	that reach no Amazon API — is in the note above `TOOLS`.
+
+	The schemas stay dicts. `alaiy_os_agents`' registry serialises them on the way
+	to the child row, so dumping them here would hand it a string to re-encode and
+	give two files an opinion on the JSON.
+	"""
+	return {**tool, "connector": CONNECTOR_ID}

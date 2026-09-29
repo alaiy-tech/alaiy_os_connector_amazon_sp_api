@@ -18,10 +18,12 @@ import frappe
 from frappe.utils import cint, flt, now_datetime
 
 from alaiy_os_connector_amazon_sp_api import connections
-
 from alaiy_os_connector_amazon_sp_api.spapi import reports
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
+	FEEDBACK_NEGATIVE_MAX_RATING,
+	FEEDBACK_POSITIVE_MIN_RATING,
+	FEEDBACK_POSITIVE_TARGET_PCT,
 	HEALTH_METRICS,
 	HEALTH_METRICS_BY_KEY,
 	HEALTH_STATUS_AT_RISK,
@@ -178,9 +180,77 @@ def parse_feedback(text, limit=50):
 
 def _pick(norm, candidates):
 	for c in candidates:
-		if c in norm and norm[c]:
+		if norm.get(c):
 			return norm[c]
 	return None
+
+
+def summarise_feedback(rows):
+	"""Buyer feedback rows as the seller rating a tile shows.
+
+	Returns `{count, average_rating, positive, neutral, negative, positive_pct,
+	negative_pct, target_positive_pct}`.
+
+	## Why this is here and the trend is not
+
+	Amazon does not publish an aggregate seller rating through SP-API — no
+	endpoint returns "4.6 stars, 98% positive". What it publishes is the
+	individual feedback rows, and the aggregate is arithmetic over them. That
+	arithmetic is pure and belongs beside the parser that produces the rows, so
+	nothing downstream has to re-derive "what counts as negative".
+
+	A *trend* does not belong here, and the reason is `feedback_date`. The
+	feedback report's date column is locale-formatted — which is why
+	`parse_feedback` hands it back as an untouched string and why the row stores
+	it as text — so bucketing these rows by day means parsing dates in a format
+	that varies by marketplace. A 30-day seller-rating trend is better built by
+	storing this summary once a day and reading the stored series back, which is
+	what the daily health sync already provides a slot for. Deriving a trend
+	from these dates would be a chart drawn on a guess about a date format.
+
+	## What "negative" means, once
+
+	1 and 2 stars, which is Amazon's own definition and the one Order Defect
+	Rate is built on — see `FEEDBACK_NEGATIVE_MAX_RATING`. Stated in constants
+	rather than inline so the seller rating and the ODR metric cannot come to
+	disagree about the same rows.
+
+	A row with no rating is counted in nothing. It is a buyer who left a comment
+	without stars, and folding it into `neutral` would move the positive share
+	using a row that expressed no opinion on the scale being reported.
+	"""
+	rated = [cint(r.get("rating")) for r in (rows or []) if r.get("rating")]
+	count = len(rated)
+	if not count:
+		return {
+			"count": 0,
+			# None rather than 0.0: no feedback is not a zero-star seller, and a
+			# tile showing 0.0 would be the most damaging possible way to say
+			# "nobody has rated you yet".
+			"average_rating": None,
+			"positive": 0,
+			"neutral": 0,
+			"negative": 0,
+			"positive_pct": None,
+			"negative_pct": None,
+			"target_positive_pct": FEEDBACK_POSITIVE_TARGET_PCT,
+		}
+
+	negative = sum(1 for r in rated if r <= FEEDBACK_NEGATIVE_MAX_RATING)
+	positive = sum(1 for r in rated if r >= FEEDBACK_POSITIVE_MIN_RATING)
+
+	return {
+		"count": count,
+		"average_rating": flt(sum(rated) / count, 2),
+		"positive": positive,
+		# Whatever is left, so the three always add up to `count` however the
+		# thresholds in constants are later adjusted.
+		"neutral": count - positive - negative,
+		"negative": negative,
+		"positive_pct": flt(positive / count * 100, 1),
+		"negative_pct": flt(negative / count * 100, 1),
+		"target_positive_pct": FEEDBACK_POSITIVE_TARGET_PCT,
+	}
 
 
 # --- finance events ----------------------------------------------------------
@@ -338,9 +408,7 @@ def _upsert_metrics(marketplace, metrics, finances, synced_at):
 			doc.update(row)
 			doc.save(ignore_permissions=True)
 		else:
-			frappe.get_doc({"doctype": "Account Health Metric", **row}).insert(
-				ignore_permissions=True
-			)
+			frappe.get_doc({"doctype": "Account Health Metric", **row}).insert(ignore_permissions=True)
 	return statuses
 
 

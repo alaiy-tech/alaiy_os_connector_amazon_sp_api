@@ -25,18 +25,24 @@ manager gate that every other live call here does.
 """
 
 import json
+import re
 from urllib.parse import quote
 
 import frappe
 from frappe import _
-
-from alaiy_os_connector_amazon_sp_api import connections
+from frappe.utils import cint
 
 from alaiy_os_connector_amazon_sp_api import app_config as config
-from alaiy_os_connector_amazon_sp_api import csv_export, links, oauth, sales
+from alaiy_os_connector_amazon_sp_api import connections, csv_export, links, oauth, sales
 from alaiy_os_connector_amazon_sp_api.spapi import (
+	customer_feedback,
+	fees,
+	finances,
 	health,
+	inventory,
 	listings,
+	packages,
+	pricing,
 	product_types,
 	reconcile,
 	submissions,
@@ -55,15 +61,59 @@ def _require_manager():
 
 
 # --- connection --------------------------------------------------------------
+def _unconfigured_status():
+	"""The connection status of a bench that has no Amazon Connection at all.
+
+	An answer rather than a throw, and the distinction matters to exactly one
+	caller: the OS settings screen, which is where a connection gets made. It
+	loads the connection status, the app credentials and the connector's DocType
+	fields together, so a throw here took the whole screen down and left the
+	operator on an alert about roles and registry rows — with no way to reach the
+	form that would have fixed it. `resolve()` still refuses for every other
+	caller, because a listing push with nowhere to push to is a bug.
+
+	`no_connection` is its own state on purpose. "Not connected" means a seller
+	who has not authorized yet; this means the site has no seller on it.
+	"""
+	return {
+		"status": "no_connection",
+		"message": _("No Amazon connection has been set up on this site yet."),
+		"connected": False,
+		"selling_partner_id": None,
+		# From site_config and the region defaults — true without a connection,
+		# and what the screen shows beside the Connect button.
+		"region": config.resolve_region(),
+		"endpoint": config.resolve_endpoint(),
+		"consent_base_url": config.consent_base_url(),
+		"use_sandbox": config.use_sandbox(),
+		"app_status": None,
+		"connected_at": None,
+		"primary_marketplace": None,
+		"primary_marketplace_id": None,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def ensure_connection():
+	"""Make sure this site has a connection to configure, and say which.
+
+	What the settings screen calls before its first save. Creates nothing on a
+	bench that already has one — see `connections.ensure_default`, which is where
+	the reasoning about when that is safe lives.
+	"""
+	_require_manager()
+	return {"connection": connections.ensure_default()}
+
+
 @frappe.whitelist()
 def get_connection_status(connection=None):
 	"""Return the current connection status (never exposes the token)."""
+	if not connection and not connections.names():
+		return _unconfigured_status()
 	conn = connections.resolve(connection)
 	marketplace_id = None
 	if conn.primary_marketplace:
-		marketplace_id = frappe.db.get_value(
-			"Amazon Marketplace", conn.primary_marketplace, "marketplace_id"
-		)
+		marketplace_id = frappe.db.get_value("Amazon Marketplace", conn.primary_marketplace, "marketplace_id")
 	return {
 		"status": conn.last_status or "not_configured",
 		"message": conn.last_status_message,
@@ -78,6 +128,178 @@ def get_connection_status(connection=None):
 		"primary_marketplace": conn.primary_marketplace,
 		"primary_marketplace_id": marketplace_id,
 	}
+
+
+# --- connections: several sellers on one bench --------------------------------
+# What the settings screen may read and write.
+#
+# An allowlist, where the platform's connector API and the Shopify settings API
+# it was copied from both filter on fieldtype. Half this DocType is not the
+# operator's to set: `refresh_token` arrives from the consent round trip and
+# from nowhere else, `last_status` / `connected_at` / `selling_partner_id` are
+# written by the preflight, and `connection_id` names the row. A fieldtype
+# filter would let the Password through and put a "leave blank to keep" box on
+# the screen for a token no human has ever held.
+EDITABLE_FIELDS = (
+	"label",
+	"region",
+	"app_status",
+	"primary_marketplace",
+	"gtin_exempt_brands",
+	"orders_customer",
+	"orders_company",
+	"orders_warehouse",
+	"orders_selling_price_list",
+	"orders_fallback_item",
+	"orders_sync_from",
+)
+
+# A connection id becomes the docname (`autoname: field:connection_id`), so it
+# has to survive being one: no "/" to end a REST path early, no "%" to be
+# decoded twice on the way to `get_connect_url`.
+CONNECTION_ID = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _connection_summary(doc):
+	"""One row of the switcher: which seller, and whether it works."""
+	return {
+		"connection": doc.name,
+		"label": doc.get("label") or doc.name,
+		"is_default": bool(doc.get("is_default")),
+		"status": doc.get("last_status") or "not_configured",
+		"message": doc.get("last_status_message"),
+		"connected": doc.is_connected(),
+		"selling_partner_id": doc.get("selling_partner_id"),
+		"region": config.resolve_region(doc.get("region")),
+		"connected_at": doc.get("connected_at"),
+	}
+
+
+@frappe.whitelist()
+def list_connections():
+	"""Every Amazon Connection on this site, oldest first.
+
+	An empty list rather than a refusal on a bench that has none: this is the
+	read the settings screen decides its whole shape from, and "there are no
+	sellers yet" is a state it has to be able to draw rather than a failure.
+	"""
+	_require_manager()
+	return [
+		_connection_summary(frappe.get_cached_doc(connections.DOCTYPE, name)) for name in connections.names()
+	]
+
+
+@frappe.whitelist(methods=["POST"])
+def create_connection(connection_id, label=None, region="NA"):
+	"""Add a seller to this bench.
+
+	Deliberately not what `ensure_connection` does. That exists so a bench with
+	nothing on it can be configured at all, and it is safe precisely because
+	there is nothing for the row it makes to be confused with. This is the other
+	case — a second seller, named on purpose — so the id is the operator's, and
+	the row is never flagged default behind their back. Which seller an unnamed
+	call answers with stays something somebody chose.
+
+	The Shopify settings API left creation out, on the grounds that a store is
+	made where the rest of it is made. Amazon has no such place: the connection
+	*is* the seller, and the Desk form is the only other thing that can make one.
+	"""
+	_require_manager()
+	connection_id = (connection_id or "").strip()
+	if not connection_id:
+		frappe.throw(_("A connection needs an id."))
+	if not CONNECTION_ID.fullmatch(connection_id):
+		frappe.throw(
+			_("A connection id can hold letters, numbers, dots, dashes and underscores — nothing else.")
+		)
+	if frappe.db.exists(connections.DOCTYPE, connection_id):
+		# `connections.create` is idempotent and would hand back the existing
+		# row. Right for a caller reconciling state, wrong for this one: the
+		# operator asked for a new seller and would be shown someone else's.
+		frappe.throw(_("There is already an Amazon connection called {0}.").format(connection_id))
+
+	doc = connections.create(
+		connection_id,
+		region=region or "NA",
+		label=label or connection_id,
+		owner_app="alaiy_os_connector_amazon_sp_api",
+	)
+	return _connection_summary(doc)
+
+
+@frappe.whitelist(methods=["POST"])
+def set_default_connection(connection):
+	"""Make one connection the one an unnamed call resolves to.
+
+	Clears the flag everywhere else in the same breath. `resolve_name` reads the
+	default with a `get_value` filter, so two flagged rows would make it answer
+	with whichever the index reached first — a coin toss deciding which seller
+	every unnamed call is about.
+	"""
+	_require_manager()
+	name = connections.resolve_name(connection)
+	for other in connections.names():
+		frappe.db.set_value(connections.DOCTYPE, other, "is_default", 1 if other == name else 0)
+	return _connection_summary(frappe.get_doc(connections.DOCTYPE, name))
+
+
+@frappe.whitelist()
+def get_connection_config(connection=None):
+	"""One connection's settings values, named.
+
+	The platform's `get_connector_config` plus the argument it cannot have. That
+	one is keyed on connector_id and resolves the record itself — a Single, the
+	lone row, else the `is_default` one — so on a bench with several sellers it
+	either throws or, worse, answers about the default no matter which seller the
+	screen is showing. Same fix as `alaiy_os_connector_shopify/api/settings.py`.
+
+	No field metadata comes back with the values, where the Shopify one returns
+	both: this screen draws its own cards rather than rendering whatever the
+	DocType happens to hold, so metadata would be shipped and ignored.
+	"""
+	_require_manager()
+	doc = connections.resolve(connection)
+	return {
+		"connection": doc.name,
+		"label": doc.get("label") or doc.name,
+		"is_default": bool(doc.get("is_default")),
+		"values": {field: doc.get(field) for field in EDITABLE_FIELDS},
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def save_connection(connection=None, values=None):
+	"""Save one connection's settings and test them — `save_and_test`, named.
+
+	One call for the reason the platform's is one call: settings nobody tested
+	are how a connector sits at "untested" while every screen quietly refuses to
+	work. The test is this app's own, run against the connection just written,
+	which is the half the generic wrapper cannot do — it takes a connector_id and
+	has no way to say which seller it tested.
+
+	A field the caller leaves out keeps what is stored; a field it sends empty is
+	cleared. The screen posts its whole form, so both readings are deliberate.
+	"""
+	_require_manager()
+	if isinstance(values, str):
+		values = json.loads(values)
+	values = values or {}
+
+	# for_write, not resolve: resolve hands back a cached document, and saving
+	# one of those writes through a copy other requests are still reading.
+	doc = connections.for_write(connection)
+	for field, value in values.items():
+		# An unknown fieldname is dropped rather than refused: the screen sends
+		# the form it was built against, and a field removed from the DocType
+		# since should not make every save fail.
+		if field in EDITABLE_FIELDS:
+			doc.set(field, value)
+	doc.save()
+	frappe.db.commit()
+
+	# Carries the connection back because the caller may have sent none and let
+	# `resolve` pick, and the screen has to know which seller it just saved.
+	return {**test_connection(doc.name), "connection": doc.name}
 
 
 @frappe.whitelist()
@@ -128,6 +350,10 @@ def get_consent_url(connection=None):
 	is not already this session.
 	"""
 	_require_manager()
+	# Connecting *is* the setup step, so a bench with no connection gets one here
+	# rather than being told to go and make it in the Desk first. Nothing is
+	# created on a bench that already has one.
+	connection = connection or connections.ensure_default()
 	state = oauth.issue_state(connection)  # consent_url asserts the app credentials are set
 	return {
 		"url": oauth.consent_url(state, connection),
@@ -228,7 +454,9 @@ def get_health_summary(marketplace=None, connection=None):
 		order_by="section asc, metric_label asc",
 	)
 
-	overall = health.rollup_status([m["health_status"] for m in metrics]) if metrics else HEALTH_STATUS_UNKNOWN
+	overall = (
+		health.rollup_status([m["health_status"] for m in metrics]) if metrics else HEALTH_STATUS_UNKNOWN
+	)
 	synced_at = max((m["synced_at"] for m in metrics if m["synced_at"]), default=None)
 
 	feedback = frappe.get_all(
@@ -245,6 +473,319 @@ def get_health_summary(marketplace=None, connection=None):
 		"feedback": feedback,
 		"synced_at": synced_at,
 	}
+
+
+# --- ratings (Phase 6) -------------------------------------------------------
+# Two reads about two different things, and the distinction is the point:
+# `get_seller_rating` is what buyers think of this *business*, which is what
+# Amazon judges the account on; `get_review_topics` is what they think of a
+# *product*. Amazon keeps them separate and so does this app.
+
+
+@frappe.whitelist()
+def get_seller_rating(limit=200):
+	"""This seller's rating, aggregated from the feedback rows already synced.
+
+	No Amazon call: `Seller Feedback` is filled by the daily health sync, and
+	Amazon publishes no aggregate seller rating through SP-API — the average and
+	the positive share are arithmetic over the individual rows. Gated on the
+	doctype it reads rather than on the manager roles, like the other register
+	reads here.
+
+	The figures are as fresh as the last health sync and no fresher, which is
+	what `synced_at` is for.
+	"""
+	if not frappe.has_permission("Seller Feedback", "read"):
+		frappe.throw(_("You are not permitted to read seller feedback."), frappe.PermissionError)
+
+	rows = frappe.get_all(
+		"Seller Feedback",
+		fields=["order_id", "rating", "comment", "feedback_date", "modified"],
+		order_by="feedback_date desc",
+		limit_page_length=cint(limit) or 200,
+	)
+	return {
+		**health.summarise_feedback(rows),
+		"rows": rows,
+		"synced_at": max((r.modified for r in rows if r.modified), default=None),
+	}
+
+
+@frappe.whitelist()
+def get_review_topics(asins=None, marketplace=None, connection=None, trends=0):
+	"""What customers raise about a product, in aggregate.
+
+	**Not reviews.** SP-API has no product-review-text endpoint at any version,
+	so this returns topics and sentiments and never a quotable sentence — see the
+	module docstring on `spapi/customer_feedback.py`, which is shaped around not
+	letting a caller believe otherwise.
+
+	Amazon refreshes these weekly and covers only English-language marketplaces.
+	An ASIN outside that comes back `supported: false` with Amazon's own reason
+	rather than as an empty topic list, so a caller can tell "nothing to report"
+	from "not covered here".
+	"""
+	_require_manager()
+
+	conn = connections.resolve(connection)
+	if asins:
+		wanted = _as_list(asins)
+	else:
+		wanted = [
+			row.asin
+			for row in frappe.get_all(
+				"Amazon Product Listing",
+				filters={
+					"marketplace": marketplace or conn.primary_marketplace,
+					"asin": ("is", "set"),
+				},
+				fields=["asin"],
+				order_by="sku asc",
+			)
+		]
+
+	result = {
+		"topics": customer_feedback.review_topics(wanted, marketplace=marketplace, connection=connection)
+	}
+	if cint(trends):
+		result["trends"] = customer_feedback.review_trends(
+			wanted, marketplace=marketplace, connection=connection
+		)
+	return result
+
+
+# --- FBA inventory -----------------------------------------------------------
+@frappe.whitelist()
+def sync_fba_inventory(marketplace=None, connection=None):
+	"""On-demand FBA stock refresh for a marketplace (defaults to primary)."""
+	_require_manager()
+	conn = connections.resolve(connection)
+	if not conn.is_connected():
+		frappe.throw(_("Amazon account is not connected. Connect it first."))
+	return inventory.sync_inventory(connection=conn, marketplace=marketplace)
+
+
+@frappe.whitelist()
+def get_fba_inventory(marketplace=None, connection=None, sku=None, limit=200):
+	"""Stored FBA stock rows for one seller, lowest fulfillable first.
+
+	Scoped to the resolved connection and not only to the marketplace. That is
+	deliberate and worth stating, because `get_health_summary` above does the
+	opposite: it filters `Account Health Metric` on marketplace alone, and on a
+	bench with two sellers in the same marketplace that reads the other seller's
+	numbers. Stock rows carry the connection precisely so this read cannot.
+
+	Sorted by what is sellable today rather than by Amazon's `total_qty`, which
+	includes inbound and unfulfillable units — see spapi/inventory.py.
+	"""
+	conn = connections.resolve(connection)
+	filters = {"connection": conn.name}
+
+	marketplace = marketplace or conn.primary_marketplace
+	if marketplace:
+		marketplace_id = frappe.db.get_value("Amazon Marketplace", marketplace, "marketplace_id")
+		filters["marketplace"] = marketplace_id or marketplace
+	if sku:
+		filters["seller_sku"] = sku
+
+	return frappe.get_all(
+		"Amazon FBA Inventory",
+		filters=filters,
+		fields=[
+			"seller_sku",
+			"asin",
+			"fnsku",
+			"condition",
+			"product_name",
+			"fulfillable_qty",
+			"inbound_qty",
+			"reserved_qty",
+			"unfulfillable_qty",
+			"researching_qty",
+			"total_qty",
+			"amazon_updated_at",
+			"synced_at",
+		],
+		order_by="fulfillable_qty asc, seller_sku asc",
+		limit_page_length=cint(limit) or 200,
+	)
+
+
+# --- fees, pricing and settled finances (Phase 6) ----------------------------
+# All three are live Amazon calls on separate SP-API roles, so all three carry
+# the manager gate. None of them stores anything: these are the operator's view
+# of what the self-serve app reads on a schedule, and a Desk button that wrote
+# rows nobody scheduled would put a second writer on the same data.
+
+
+def _priced_listings(skus, marketplace, connection):
+	"""The listing rows a fee estimate can be quoted against.
+
+	A fee estimate is a function of the price, so a row without one cannot be
+	quoted and is dropped rather than sent at zero — Amazon answers a zero price
+	with a zero commission, which is a wrong number rather than an error.
+
+	`fulfillment_channel` decides which fee schedule Amazon quotes and is read off
+	the row rather than defaulted, for the reason in `spapi/fees.py`: asking for
+	the wrong schedule returns a confident wrong answer.
+	"""
+	conn = connections.resolve(connection)
+	filters = {"price": (">", 0)}
+	marketplace = marketplace or conn.primary_marketplace
+	if marketplace:
+		filters["marketplace"] = marketplace
+	if skus:
+		filters["sku"] = ("in", _as_list(skus))
+
+	rows = frappe.get_all(
+		"Amazon Product Listing",
+		filters=filters,
+		fields=["sku", "asin", "price", "currency", "fulfillment_channel"],
+		order_by="sku asc",
+	)
+	return [
+		{
+			"sku": row.sku,
+			"asin": row.asin,
+			"price": row.price,
+			"currency": row.currency,
+			# The register stores Amazon's own code; AMAZON-prefixed values are the
+			# FBA schedule (see FULFILLMENT_CHANNEL_CODES).
+			"fba": (row.fulfillment_channel or "").upper().startswith("AMAZON"),
+		}
+		for row in rows
+	]
+
+
+@frappe.whitelist()
+def get_fee_estimates(skus=None, marketplace=None, connection=None):
+	"""What Amazon would charge on each listed SKU at its current price.
+
+	An estimate, always, and the return says so on every row (`basis`). See
+	`spapi/fees.py` on why the estimate is the primary figure rather than the
+	fallback, and `get_settled_fees` for what Amazon actually took.
+	"""
+	_require_manager()
+	items = _priced_listings(skus, marketplace, connection)
+	if not items:
+		return {"estimates": {}, "quoted": 0, "skipped": "No listings with a price to quote against."}
+
+	estimates = fees.estimate_fees(items, marketplace=marketplace, connection=connection)
+	return {
+		"estimates": estimates,
+		"quoted": len(estimates),
+		"requested": len(items),
+	}
+
+
+@frappe.whitelist()
+def get_buy_box_summary(asins=None, marketplace=None, connection=None, days=7):
+	"""Who holds the Buy Box now, and what share of the last week we held it.
+
+	Two different sources answering two different questions — a live pricing call
+	and a business report. `spapi/pricing.py` is where the distinction is argued;
+	the short version is that nothing in the Pricing API knows the share, and
+	nothing in the report knows the current price.
+
+	The share half is best-effort. It needs a role the price half does not, and a
+	seller missing it should still learn what they are being undercut by.
+	"""
+	_require_manager()
+
+	conn = connections.resolve(connection)
+	if asins:
+		wanted = _as_list(asins)
+	else:
+		wanted = [
+			row.asin
+			for row in frappe.get_all(
+				"Amazon Product Listing",
+				filters={"marketplace": marketplace or conn.primary_marketplace, "asin": ("is", "set")},
+				fields=["asin"],
+				order_by="sku asc",
+			)
+		]
+
+	prices = pricing.competitive_summary(wanted, marketplace=marketplace, connection=connection)
+
+	share = {}
+	share_error = None
+	try:
+		share = pricing.buy_box_share(
+			frappe.utils.add_days(frappe.utils.nowdate(), -cint(days) or -7),
+			frappe.utils.nowdate(),
+			marketplace=marketplace,
+			connection=connection,
+		)
+	except Exception as e:
+		# Reported, not raised, and not swallowed either: a caller has to be able
+		# to tell "we won 0% of the Buy Box" from "we could not find out".
+		share_error = str(e)
+
+	return {
+		"prices": prices,
+		"share": share,
+		"share_error": share_error,
+		"days": cint(days) or 7,
+	}
+
+
+@frappe.whitelist()
+def get_settled_fees(days=30, marketplace=None, connection=None):
+	"""Fees Amazon has actually taken, per SKU, over the last `days`.
+
+	Settled figures only. A sale settles two to four weeks after it happens, so
+	the recent end of any window this returns is legitimately empty — that is the
+	endpoint working, not a sync that has fallen behind, and it is why
+	`get_fee_estimates` exists alongside it.
+	"""
+	_require_manager()
+	posted_after = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-(cint(days) or 30))
+	return finances.settled_fees(
+		posted_after.isoformat(),
+		marketplace=marketplace,
+		connection=connection,
+	)
+
+
+# --- shipments (Phase 6) -----------------------------------------------------
+# Reads only, and stateless. The order sync writes Sales Orders; whether a
+# package row belongs on one is a schema decision that has not been made, and a
+# Desk button that made it silently would be the worst way to make it.
+
+
+@frappe.whitelist()
+def get_order_packages(order_ids):
+	"""Carrier and tracking for merchant-fulfilled orders, by Amazon order id.
+
+	MFN only — an FBA order carries no packages on the order and answers with an
+	empty array rather than an error. `get_fba_shipments` is the other half. See
+	`spapi/packages.py` on why those two sources cannot be merged into one call.
+	"""
+	_require_manager()
+	wanted = _as_list(order_ids)
+	if not wanted:
+		frappe.throw(_("Name at least one Amazon order id."))
+	return packages.order_packages(wanted)
+
+
+@frappe.whitelist()
+def get_fba_shipments(days=7, marketplace=None, connection=None):
+	"""Amazon's own shipments for this seller over the last `days`.
+
+	The window is capped by the report itself (see FBA_SHIPMENTS_MAX_WINDOW_DAYS)
+	and a wider request is refused rather than truncated — a backfill that
+	quietly returned one month of three would leave two months looking like a
+	seller with no FBA shipments at all.
+	"""
+	_require_manager()
+	window = cint(days) or 7
+	return packages.fba_shipments(
+		frappe.utils.add_days(frappe.utils.nowdate(), -window),
+		frappe.utils.nowdate(),
+		marketplace=marketplace,
+		connection=connection,
+	)
 
 
 # --- listings (Phase 2) ------------------------------------------------------
@@ -460,7 +1001,7 @@ def _as_list(value):
 # correctable; minting a public ASIN is not, so it is asked for one row at a
 # time rather than reachable from a bulk selection. See spapi.listings.create_asin.
 @frappe.whitelist()
-def preview_asin_creation(sku, marketplace=None):
+def preview_asin_creation(sku, marketplace=None, connection=None):
 	"""What creating this product on Amazon would submit. Read-only.
 
 	Returns {ready, blockers, warnings, attributes, required, ...}. `blockers` is
@@ -468,7 +1009,7 @@ def preview_asin_creation(sku, marketplace=None):
 	where — and `attributes` is the payload a ready row would send.
 	"""
 	_require_manager()
-	return listings.preview_asin_creation(sku, marketplace=marketplace)
+	return listings.preview_asin_creation(sku, marketplace=marketplace, connection=connection)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -640,9 +1181,7 @@ def _assert_orders_configured(connection=None):
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 	if not conn.orders_customer:
-		frappe.throw(
-			_("Set a Default Customer under Orders on the Amazon Connection before syncing orders.")
-		)
+		frappe.throw(_("Set a Default Customer under Orders on the Amazon Connection before syncing orders."))
 	return conn
 
 
@@ -699,10 +1238,16 @@ def get_orders_sync_status(connection=None):
 	sales reads return lies by omission, answering a period the sync never
 	covered with a confident zero.
 	"""
-	conn = connections.resolve(connection)
 	span = {"first_order_date": None, "last_order_date": None, "synced_orders": 0}
+	if not connection and not connections.names():
+		# Same reasoning as `_unconfigured_status`: this is one of four reads the
+		# settings screen makes on load, and a throw here blanks the screen.
+		return {"configured": False, "last_sync_at": None, **span}
+
+	conn = connections.resolve(connection)
 	if frappe.db.exists("DocType", "Sales Order"):
 		span = sales.coverage()
+
 	return {
 		"configured": bool(conn.orders_customer),
 		"last_sync_at": conn.last_orders_sync_at,

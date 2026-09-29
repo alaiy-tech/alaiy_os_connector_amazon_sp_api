@@ -97,7 +97,29 @@ CATALOG_MAX_IDENTIFIERS = 20
 # product_description / bullet_point / generic_keyword, images carry the variant
 # set, summaries carry itemName as a fallback title, relationships carry the
 # variation family (parent/child ASINs + theme).
-CATALOG_CONTENT_INCLUDED_DATA = "summaries,attributes,images,relationships"
+# `identifiers` carries the UPC/EAN/GTIN Amazon holds for the ASIN, and
+# `classifications` the browse-node ancestry. Both are catalog facts rather than
+# seller contributions, which is exactly why they have to come from here:
+# `externally_assigned_product_identifier` in a *listing's* attributes is only
+# populated for a seller who created the ASIN, so for a reseller — most sellers —
+# it is simply absent, and matching a catalogue on it silently matches nothing.
+CATALOG_CONTENT_INCLUDED_DATA = "summaries,attributes,images,relationships,identifiers,classifications"
+
+# Which product identifier wins when Amazon returns several for one ASIN, most
+# specific first. It usually returns both an EAN and the UPC inside it — the
+# same barcode, one zero-padded to 13 digits — so a single stored value has to
+# pick, and EAN is the one that survives that padding without ambiguity.
+#
+# Consumers matching across channels should compare the *full* list from
+# `identifiers_from` rather than this pick: a Shopify barcode holding the UPC
+# and an Amazon EAN of the same product differ by a leading zero and are not
+# equal as strings.
+PRODUCT_ID_PREFERENCE = ("EAN", "UPC", "GTIN", "ISBN")
+
+# How deep a browse-node chain we flatten into l1/l2/l3. Amazon's tree is
+# deeper than three in several categories; the schema has three columns, so a
+# longer chain keeps its two topmost nodes and its leaf and drops the middle.
+CATALOG_CATEGORY_LEVELS = 3
 
 # The relationship type that describes a variation family. The same array also
 # carries PACKAGE_HIERARCHY, which is a different thing entirely.
@@ -120,6 +142,22 @@ FULFILLMENT_CHANNEL_CODES = {
 	"DEFAULT": "DEFAULT",
 	"AMAZON": "AMAZON_NA",
 }
+
+# --- FBA Inventory API (v1) -------------------------------------------------
+# The only endpoint that knows what Amazon is holding. A Listings item's
+# `fulfillmentAvailability` is the quantity the *seller* declared, which for an
+# FBA SKU is nothing at all — see FULFILLMENT_CHANNEL_CODES above, where AMAZON
+# is annotated "quantity managed by Amazon".
+FBA_INVENTORY_SUMMARIES_PATH = "/fba/inventory/v1/summaries"
+
+# getInventorySummaries is granular per marketplace and takes no other
+# granularity in practice, though the parameter exists for future ones.
+FBA_INVENTORY_GRANULARITY = "Marketplace"
+
+# Pages are Amazon-sized (no pageSize parameter on this endpoint), so the cap is
+# on page count: a safety rail against a paging bug spinning a worker, not a
+# limit any real catalogue reaches.
+FBA_INVENTORY_MAX_PAGES = 200
 
 # --- Orders API (v0) --------------------------------------------------------
 ORDERS_PATH = "/orders/v0/orders"
@@ -157,7 +195,7 @@ ORDERS_SYNC_OVERLAP = 300  # seconds
 # misconfiguration (wrong customer, unmapped SKUs), and a narrow window makes
 # that cheap to inspect and undo. Reach further back with `orders_sync_from`,
 # or with the manual backfill, once the first run looks right.
-ORDERS_DEFAULT_LOOKBACK_DAYS = 1
+ORDERS_DEFAULT_LOOKBACK_DAYS = 31
 
 # A backfill is walked in chunks: Amazon degrades badly on very wide
 # LastUpdatedAfter/Before windows for high-volume sellers.
@@ -303,3 +341,256 @@ DEFAULT_MARKETPLACES = [
 	("A1VC38T7YXB528", "Japan", "JP", "FE", "JPY", "amazon.co.jp", "ja_JP"),
 	("A39IBJ37TRP1C6", "Australia", "AU", "FE", "AUD", "amazon.com.au", "en_AU"),
 ]
+
+# --- Product Fees API (v0) --------------------------------------------------
+# What Amazon will take out of a sale, *before* it happens. The Finances API
+# says what it actually took, but only once the order has settled — which for a
+# sale made this week is somewhere between two and four weeks away. A margin
+# figure that waited for settlement would be blank on exactly the products a
+# seller is currently deciding about, so both are read and every fee this app
+# reports carries which of the two it came from.
+FEES_ESTIMATE_BATCH_PATH = "/products/fees/v0/feesEstimate"
+
+# Amazon's own ceiling on one batch request.
+FEES_ESTIMATE_BATCH_SIZE = 20
+
+# getMyFeesEstimates is rate-limited at 0.5 requests a second with a burst of
+# 1 — the tightest limit in this app, tighter even than getOrderItems. The
+# client's 429-retry alone would spend a whole sync backing off, so batches are
+# paced by this rather than by the backoff.
+FEES_ESTIMATE_MIN_INTERVAL = 2.0  # seconds between batch calls
+
+# Amazon returns one FeeDetail per charge with no grouping, and the set differs
+# per marketplace and per fulfilment channel. These are the buckets this app
+# reports, because they are the three a seller reasons about: what Amazon takes
+# for the sale, what it takes for the shipping, and everything else.
+#
+# ReferralFee is the commission. VariableClosingFee and PerItemFee are separate
+# charges Amazon levies on media and on individual-plan sellers respectively;
+# they are commission in every sense that matters to a margin, so they land in
+# the same bucket rather than in "other" where nobody would look for them.
+FEE_TYPES_REFERRAL = ("ReferralFee", "VariableClosingFee", "PerItemFee")
+
+# The FBA family. `FBAFees` is the roll-up Amazon sends for most marketplaces,
+# with the pick-pack and weight-handling components nested inside it under
+# IncludedFeeDetailList; the per-unit and per-order names are what older
+# marketplaces send instead. Summing the roll-up *and* its own components would
+# double-count, which is why `fees.py` never descends into IncludedFeeDetailList.
+FEE_TYPES_FBA = (
+	"FBAFees",
+	"FBAFulfillmentFee",
+	"FBAPerUnitFulfillmentFee",
+	"FBAPerOrderFulfillmentFee",
+	"FBAWeightBasedFee",
+	"FBATransportationFee",
+)
+
+# Amazon needs telling which fee schedule to quote. A SKU fulfilled by Amazon is
+# charged the FBA schedule and a merchant-fulfilled one is not, and asking for
+# the wrong one does not error — it returns a confidently wrong number.
+FEES_FBA_PROGRAM = "FBA_CORE"
+
+# --- Product Pricing API (2022-05-01) ---------------------------------------
+# The competitive read. v0's getItemOffers still works, but 2022-05-01 is where
+# Amazon's development went and it answers in one batch what v0 answers per
+# ASIN — so a page of listings costs one call rather than twenty.
+COMPETITIVE_SUMMARY_PATH = "/batches/products/pricing/2022-05-01/items/competitiveSummary"
+
+# Amazon's ceiling on one competitiveSummary batch.
+COMPETITIVE_SUMMARY_BATCH_SIZE = 20
+
+# What to ask for per ASIN. `featuredBuyingOptions` carries the Buy Box winner's
+# price, which is the only way to learn what a seller is being beaten by;
+# `referencePrices` carries Amazon's own competitive and list prices.
+COMPETITIVE_SUMMARY_INCLUDED_DATA = ("featuredBuyingOptions", "referencePrices")
+
+# The buying option Amazon calls the Buy Box. It sends others (used, subscribe
+# and save) in the same array, and treating the first entry as the Buy Box price
+# would compare a new-condition listing against a used offer.
+FEATURED_OFFER_BUYING_OPTION = "New"
+
+# How stale a competitive price is allowed to get before it is worth nothing.
+# The Buy Box changes within hours, so a price snapshot from yesterday is
+# history rather than a decision input — see the cadence note in
+# `alaiy_os_self_serve_apis.selfserve.profitability`.
+COMPETITIVE_PRICE_MAX_AGE_HOURS = 6
+
+# --- Buy Box win rate ------------------------------------------------------
+# Not a pricing endpoint at all, and this is the single most-missed fact about
+# Buy Box data on SP-API: `getCompetitiveSummary` says who holds the Buy Box
+# *right now*, and nothing anywhere says what share of the day a seller held it.
+# That figure — the one a seller means by "Buy Box win rate" — exists only in the
+# Sales & Traffic business report, per ASIN, as `buyBoxPercentage`.
+#
+# So the win rate is a report and the competitor price is an API call, on
+# different cadences, and this app never derives one from the other.
+REPORT_SALES_AND_TRAFFIC = "GET_SALES_AND_TRAFFIC_REPORT"
+
+# The report's own granularity vocabulary. DAY is the finest it offers per ASIN.
+SALES_AND_TRAFFIC_GRANULARITY = "DAY"
+
+# --- Finances API (2024-06-19) ----------------------------------------------
+# The settled truth. `listTransactions` replaced the twenty-odd event-type
+# arrays of `/finances/v0/financialEvents` with one shape, which is why this app
+# reads fee actuals here and keeps the v0 call only for the two counters
+# `spapi.health` needs from it.
+TRANSACTIONS_PATH = "/finances/2024-06-19/transactions"
+
+# Page cap. A month of transactions for a busy seller runs to thousands of rows
+# and the caller wants a fee total, not the ledger — this is the rail that keeps
+# a paging bug from spinning a worker.
+TRANSACTIONS_MAX_PAGES = 50
+
+# The transaction types that carry a sale's fees. Amazon files a refund's fee
+# reversal under `Refund` with positive amounts, so a fee total that swept up
+# every type would net a refunded referral fee against a charged one and report
+# less commission than was paid.
+TRANSACTION_TYPES_SALE = ("Shipment", "Order")
+
+# The breakdown the settled feed files fees under, and the names inside it.
+# Amazon's settled vocabulary is not its estimate vocabulary: the commission a
+# fee estimate calls `ReferralFee` arrives here as `Commission`. Both spellings
+# are listed rather than mapped, because a marketplace sending the estimate's
+# name into the settled feed should still land in the referral bucket.
+TRANSACTION_FEES_BREAKDOWN = "Fees"
+SETTLED_FEE_REFERRAL_NAMES = (
+	"Commission",
+	"ReferralFee",
+	"VariableClosingFee",
+	"PerItemFee",
+)
+
+# Matched as a prefix, unlike the estimate side's exact tuple. The settled feed
+# carries a long tail of FBA charge names that differ per marketplace and grows
+# whenever Amazon adds a programme (`FBAPerUnitFulfillmentFee`,
+# `FBAWeightBasedFee`, `FBADisposalFee`, …). An exact list would silently file
+# next quarter's new fee name under "other"; every one of them is a fulfilment
+# charge and belongs in the same bucket.
+SETTLED_FEE_FBA_PREFIX = "FBA"
+
+# The context Amazon attaches a product to a transaction item with. Without it a
+# fee is real money against an order but cannot be attributed to a SKU, which is
+# the grain the whole margin table is computed at.
+TRANSACTION_PRODUCT_CONTEXT = "ProductContext"
+
+# --- Orders API 2026-01-01: packages ----------------------------------------
+# Tracking and carrier data, which `spapi.orders` has always said it
+# "deliberately not touched" — because until this version there was no way to
+# read it. v0 returns an order and its items and nothing about the shipment that
+# carried them; the only route to a tracking number was the flat-file all-orders
+# report. 2026-01-01 adds `packages` to the order itself.
+#
+# The version is a constant rather than inline for a specific reason: this is
+# the newest surface anything here calls, and a marketplace or an app that has
+# not been moved onto it answers with a 400 rather than an empty array. One
+# place to change, and `packages.py` reports that refusal as itself rather than
+# as "no packages".
+ORDERS_API_VERSION_PACKAGES = "2026-01-01"
+ORDERS_PACKAGES_BASE = f"/orders/{ORDERS_API_VERSION_PACKAGES}/orders"
+
+# What to ask `getOrder` to include. Packages are opt-in: the call returns the
+# order without them and does not hint that more was available.
+ORDERS_INCLUDED_DATA_PACKAGES = "PACKAGES"
+
+# Merchant-fulfilled only. Amazon does not put an FBA order's packages here —
+# those are Amazon's own shipments and come from the fulfilled-shipments report
+# below. A sync that asked this endpoint for AFN tracking would get empty
+# arrays and conclude the seller ships nothing late.
+FULFILLMENT_CHANNEL_MERCHANT = "MFN"
+FULFILLMENT_CHANNEL_AMAZON = "AFN"
+
+# --- FBA fulfilled shipments report -----------------------------------------
+# The AFN half of the same picture: carrier, tracking number, ship date and
+# estimated arrival for every shipment Amazon made on the seller's behalf.
+#
+# Chosen over Fulfillment Outbound's `getPackageTrackingDetails`, which answers
+# for one package number at a time — a day's FBA orders would be hundreds of
+# calls against a rate limit, to assemble what one report already contains.
+# That endpoint is the right tool for chasing a single package and the wrong one
+# for a dashboard.
+REPORT_FBA_SHIPMENTS = "GET_AMAZON_FULFILLED_SHIPMENTS_DATA_GENERAL"
+
+# Amazon rejects a request for this report wider than about two months, and
+# degrades well before that. The caller walks a longer backfill in chunks.
+FBA_SHIPMENTS_MAX_WINDOW_DAYS = 30
+
+# Amazon's package-status vocabulary, normalised. The right-hand values are this
+# app's own and are what every consumer switches on, because the shape of a
+# fulfilment problem is the same whoever carried it: in flight, arrived, or
+# stopped somewhere it should not have.
+#
+# `UNKNOWN` is a real answer and not a parsing failure — a status Amazon has
+# added that is not in this map must not silently become "in transit", which is
+# the reassuring option and the wrong one.
+PACKAGE_STATUS_MAP = {
+	"PENDING": "pending",
+	"LABEL_PURCHASED": "pending",
+	"SHIPPED": "in_transit",
+	"IN_TRANSIT": "in_transit",
+	"OUT_FOR_DELIVERY": "in_transit",
+	"DELIVERING": "in_transit",
+	"DELIVERED": "delivered",
+	"AVAILABLE_FOR_PICKUP": "delivered",
+	"UNDELIVERABLE": "exception",
+	"RETURNING": "returned",
+	"RETURNED": "returned",
+	"LOST": "lost",
+	"DAMAGED": "exception",
+	"REJECTED": "exception",
+	"CANCELLED": "cancelled",
+	"CANCELED": "cancelled",
+}
+
+# --- Customer Feedback API (2024-06-01) -------------------------------------
+# The only review-adjacent data Amazon exposes, and it is not reviews.
+#
+# **There is no product-review-text endpoint on SP-API, at any version.** Not in
+# preview, not gated behind a role. A seller's own reviews are readable only by
+# logging into Seller Central. So the Ratings tab's "3 reviews this week mention
+# 'zipper'" cannot be built from this API — see the module docstring on
+# `spapi/customer_feedback.py`, which is shaped around not letting a caller
+# believe otherwise.
+#
+# What this API does give is aggregate: which topics customers raise about an
+# ASIN, with a sentiment, and how the rating is trending. That supports "quality
+# complaints about this product are rising" and never a quotable sentence.
+CUSTOMER_FEEDBACK_BASE = "/customerFeedback/2024-06-01"
+
+# Per-ASIN aggregated review topics, and the rating trend behind them.
+CUSTOMER_FEEDBACK_ITEM_TOPICS = CUSTOMER_FEEDBACK_BASE + "/items/{asin}/reviews/topics"
+CUSTOMER_FEEDBACK_ITEM_TRENDS = CUSTOMER_FEEDBACK_BASE + "/items/{asin}/reviews/trends"
+
+# Amazon refreshes these weekly and only for English-language marketplaces, a
+# subset of the ones this app supports.
+#
+# **There is deliberately no list of supported marketplaces here.** A hardcoded
+# one is wrong in both directions the moment Amazon changes it: too narrow and
+# the feature is silently disabled for a seller who could use it, too wide and
+# every sync logs an error for a marketplace that was never going to answer. So
+# Amazon is asked, and a refusal is reported as `supported: False` with the
+# reason it gave. See `_unsupported` in customer_feedback.py.
+#
+# The weekly cadence is the constant worth having, because it decides what a
+# caller may claim: a topic that appeared today has been building for up to a
+# week, and nothing here is a near-real-time signal.
+CUSTOMER_FEEDBACK_REFRESH_DAYS = 7
+
+# Sentiment values Amazon labels a topic with, normalised to lower case by the
+# reader. Held here so a consumer can switch on them without matching strings
+# Amazon might capitalise differently.
+FEEDBACK_SENTIMENT_POSITIVE = "positive"
+FEEDBACK_SENTIMENT_NEGATIVE = "negative"
+FEEDBACK_SENTIMENT_NEUTRAL = "neutral"
+
+# --- Seller feedback aggregation --------------------------------------------
+# Amazon counts 1- and 2-star buyer feedback as negative, and that is the
+# definition Order Defect Rate is built on. Stated once here so the seller
+# rating and the account-health metric cannot drift apart on what "negative"
+# means.
+FEEDBACK_NEGATIVE_MAX_RATING = 2
+FEEDBACK_POSITIVE_MIN_RATING = 4
+
+# Amazon's own Buy Box eligibility guidance sits around this share of positive
+# feedback. Used as the reference line on the seller-rating trend, not as a
+# threshold this app enforces.
+FEEDBACK_POSITIVE_TARGET_PCT = 95.0

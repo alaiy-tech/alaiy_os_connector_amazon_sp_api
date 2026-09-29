@@ -104,6 +104,34 @@ def for_write(connection=None):
 	return frappe.get_doc(DOCTYPE, resolve_name(connection))
 
 
+def ensure_default():
+	"""The connection an unnamed call resolves to, creating it if there is none.
+
+	The one safe moment to create a connection on a caller's behalf: a site with
+	*zero* of them has no other seller to confuse this one with, so flagging the
+	new row as the default cannot hand a later unnamed call somebody else's data
+	— the failure the rest of this module exists to prevent. With one or more
+	already here it creates nothing and answers the ordinary way, which means a
+	multi-seller bench still gets `resolve_name`'s refusal rather than a
+	surprise fourth seller.
+
+	This is what makes the OS's own settings screen usable on a fresh bench. The
+	screen writes through the platform's registry-driven connector API, which
+	needs a row to write to and cannot invent one — it has no way to know this
+	DocType is named `field:connection_id`. Before this, a bench that had never
+	configured Amazon had no connection, no way to make one outside the Desk, and
+	every Amazon screen pointing at a settings screen that could not load.
+	"""
+	if not names():
+		return create(
+			DEFAULT_ID,
+			label="Amazon",
+			owner_app="alaiy_os_connector_amazon_sp_api",
+			is_default=True,
+		).name
+	return resolve_name()
+
+
 def connected_names() -> list[str]:
 	"""
 	Connections with a refresh token stored.

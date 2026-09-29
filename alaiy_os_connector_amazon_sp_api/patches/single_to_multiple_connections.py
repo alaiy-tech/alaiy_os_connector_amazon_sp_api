@@ -75,8 +75,10 @@ def execute():
 	doc.refresh_token = None
 	doc.flags.ignore_permissions = True
 	doc.flags.ignore_mandatory = True
-	doc.insert(ignore_permissions=True)
+	# ignore_links, and the sweep after — see _drop_dangling_links.
+	doc.insert(ignore_permissions=True, ignore_links=True)
 
+	_drop_dangling_links(doc)
 	_move_password(doc.name)
 
 	frappe.db.delete("Singles", {"doctype": DOCTYPE})
@@ -85,6 +87,54 @@ def execute():
 	frappe.logger().info(
 		f"Amazon connector: migrated the Single connection to {DOCTYPE} {doc.name}"
 	)
+
+
+def _drop_dangling_links(doc) -> None:
+	"""
+	Clear Link values whose target does not exist on this site.
+
+	Two things put a name in a Link field here, and either can name a record
+	this site has never had:
+
+	  * a row in tabSingles, written while the record still existed;
+	  * a field default. `orders_selling_price_list` defaults to
+	    "Standard Selling", a Price List that exists only on a site whose
+	    ERPNext setup wizard created it, and the default lands on the document
+	    whether or not the Single ever stored that field.
+
+	Left to `_validate_links`, either one throws, and a throw here takes the
+	whole `bench migrate` — and with it the deploy — down at the insert, which
+	is before the refresh token has been re-keyed: no connection row, and a
+	token still keyed to the Single.
+
+	Hence `ignore_links` on the insert and this sweep *after* it. Clearing the
+	values beforehand cannot work: `Document.insert` calls `_set_defaults` four
+	lines before `_validate_links`, and that re-applies every doctype default to
+	whatever field is empty — including the one just cleared. Anything dropped
+	before the insert is put back before the links are checked.
+
+	So the correction has to come after the row exists, and it is a direct write
+	rather than a save, because a save would run the same defaulting again. It
+	lands in the transaction this patch commits, so the dangling value is never
+	visible to anything outside it.
+
+	Dropping rather than keeping: every one of these fields is optional to the
+	connector (`spapi.orders` falls back to "Standard Selling" when the price
+	list is empty), so a seller re-picking a warehouse is a far smaller thing
+	than a deploy that cannot proceed. It is logged all the same — a setting
+	going quietly empty is worth a line.
+	"""
+	for df in doc.meta.get_link_fields():
+		value = doc.get(df.fieldname)
+		if not value or frappe.db.exists(df.options, value):
+			continue
+
+		doc.set(df.fieldname, None)
+		frappe.db.set_value(DOCTYPE, doc.name, df.fieldname, None, update_modified=False)
+		frappe.logger().warning(
+			f"Amazon connector: dropped {DOCTYPE}.{df.fieldname} = {value!r} — "
+			f"no such {df.options} on this site"
+		)
 
 
 def _move_password(new_name: str) -> None:
