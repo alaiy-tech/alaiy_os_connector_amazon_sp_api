@@ -703,23 +703,29 @@ def _distinct_values(doctype, column, limit=2000):
 
 def get_reference_values():
 	"""
-	The vocabulary already in use for the exact fields the agent fills, so it reuses
-	established terms instead of inventing near-duplicates.
+	The reference values the agent needs for every listing: which marketplaces this
+	seller lists on, which decide the language and spelling the copy has to be written
+	in — `en-GB` for amazon.co.uk, `en-US` for amazon.com — something the product data
+	itself does not say.
 
-	`keywords` are this seller's existing backend search terms across every listing.
-	They are the one field where consistency across a catalog genuinely compounds:
-	a shopper who finds one of these listings should find the neighbouring ones too.
+	**No keyword vocabulary, deliberately.** This used to return every distinct backend
+	keyword across the whole catalogue (capped at 2,000, alphabetical), on the theory
+	that reusing established terms keeps a catalogue consistent. In practice it was
+	the bulk of every run's input — 42 KB of a 54 KB payload, re-read on every turn —
+	and almost none of it related to the product in hand: a bumper or a flowerpot was
+	handed two thousand pet-clothing terms. It also pulled against `validate`, which
+	rejects keywords that repeat the title or bullets, so the terms it suggested were
+	often ones a save would refuse. Without the product, which this handler is not
+	given, there is no way to pick the relevant few.
 
-	`marketplaces` decide the language and spelling the copy has to be written in —
-	`en-GB` for amazon.co.uk, `en-US` for amazon.com — which is not something the
-	product data itself says.
-
-	Every lookup is guarded: these doctypes belong to the Amazon connector and may
-	not be installed.
+	Guarded: these doctypes belong to the Amazon connector and may not be installed.
 	"""
 	return {
-		"keywords": _distinct_values("Amazon Listing Keyword", "keyword"),
 		"marketplaces": _distinct_values(LISTING_DOCTYPE, "marketplace"),
+		"note": (
+			"No keyword vocabulary is provided. Write keywords for this product from its "
+			"own title, bullets and photos, following the channel's keyword rules."
+		),
 	}
 
 

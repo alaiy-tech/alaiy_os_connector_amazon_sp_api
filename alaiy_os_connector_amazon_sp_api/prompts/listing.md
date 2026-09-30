@@ -88,7 +88,7 @@ common misspellings, related use cases, and regional variants.
 - **Never repeat a word that already appears in the title or bullets** — Amazon indexes those already and a repeat wastes the byte budget.
 - No competitor brand names, no ASINs, no subjective claims, no temporary statements.
 - Keep the whole set **under roughly 250 bytes**.
-- Reuse an established keyword from `get_reference_values` verbatim when it applies, and write in the language and spelling of the listing's own marketplace (`en-GB` spelling for `amazon.co.uk`, `en-IN`/`en-US` as appropriate).
+- Write in the language and spelling of the listing's own marketplace (`get_reference_values` lists them): `en-GB` spelling for `amazon.co.uk`, `en-IN`/`en-US` as appropriate.
 
 ## VARIANT SPECIFICATIONS
 
@@ -138,8 +138,11 @@ to fill the field.
 
 ## IMAGES
 
-**This channel has no image step yet.** `get_channel_spec` will tell you so
-(`has_image_step: false`). Set `images` to an empty array and move on — do not
-describe imagery you would have wanted, do not put the missing photos in
-`needs_review`, and do not report it as a failure. The product's existing photos are
-still shown to you by `get_product`, and reading them is most of what they are for.
+**This channel has an image step** (`has_image_step: true`): `prepare_images` translates
+the photos and puts the main one on a white background. Copy its `images` into your
+`images` field **verbatim and in the same order** — the first entry is the main image,
+the rest are the gallery, each with its own `role`, `kind`, `source_url` and `url`.
+Never drop them, reorder them, or leave `images` empty when `prepare_images` returned
+any. If it returned an empty list with a note, set `images` to `[]` and record the note.
+The product's existing photos are also shown to you by `get_product`; reading them is
+how you find specs that appear only in the photo.

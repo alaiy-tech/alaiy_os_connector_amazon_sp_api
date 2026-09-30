@@ -17,7 +17,7 @@
    "items": {
     "type": "string"
    },
-   "description": "Amazon BACKEND search terms, for the listing's `keywords` table \u2014 invisible to the shopper. Put here only the terms that did NOT earn a place in the title or bullets: synonyms, alternate and regional spellings, common misspellings, and related use cases. Never repeat a word that already appears in the title or bullets; Amazon already indexes those and a repeat wastes the byte budget. No competitor brand names, no third-party IP, no ASINs, no subjective claims ('best', 'cheapest'), no temporary statements ('new', 'sale'). Keep the whole set under roughly 250 bytes. Reuse a keyword from get_reference_values verbatim when it applies, so the catalog stays consistent."
+   "description": "Amazon BACKEND search terms, for the listing's `keywords` table \u2014 invisible to the shopper. Put here only the terms that did NOT earn a place in the title or bullets: synonyms, alternate and regional spellings, common misspellings, and related use cases. Never repeat a word that already appears in the title or bullets; Amazon already indexes those and a repeat wastes the byte budget. No competitor brand names, no third-party IP, no ASINs, no subjective claims ('best', 'cheapest'), no temporary statements ('new', 'sale'). Keep the whole set under roughly 250 bytes."
   },
   "brand": {
    "type": [
