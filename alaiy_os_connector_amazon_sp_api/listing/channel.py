@@ -103,6 +103,7 @@ def channel():
 			"get_reference_values": f"{_SELF}.get_reference_values",
 			"save_listing": f"{_SELF}.save_listing",
 			"validate": f"{_SELF}.validate",
+			"normalize": f"{_SELF}.normalize",
 			"health": f"{_SELF}.health",
 			"register": f"{_SELF}.register",
 			"prepare_images": f"{_SELF}.prepare_images",
@@ -302,6 +303,113 @@ _FORBIDDEN_CHARS = re.compile(
 )
 
 _WORD = re.compile(r"[a-z0-9']+")
+
+
+#: A keyword row is a Data field, which Frappe caps at 140 characters. A longer one
+#: fails the save with a length error rather than a defect the model could act on.
+KEYWORD_ROW_MAX = 140
+
+
+def normalize(listing):
+	"""`listing`, with the keyword defects that need no judgement already fixed.
+
+	Called by the shared listing agent's `save_listing` before `validate`, so what is
+	fixed here is never sent back to the model. That matters because these were most
+	of its retries: on a 30-product sourcing run, 61 of 63 rejected saves named
+	keywords that repeat the title or bullets. Each rejection resends the whole
+	conversation, and each is another chance for a small model to give up.
+
+	Only mechanical fixes, the same rules `_check_keywords` applies:
+
+	- a word the title or bullets already use (longer than two letters) is dropped
+	  from the keywords -- Amazon indexes it already;
+	- repeats and empty terms are dropped;
+	- a term too long for its row is split at word boundaries;
+	- the set is trimmed from the end to the byte budget, which Amazon enforces by
+	  silently discarding the rest anyway.
+
+	One wording fix, and only one: "perfect" becomes "ideal" ("a perfect" becomes
+	"an ideal"), keeping its case. It was the only restricted word left in those
+	rejected saves -- 28 times across 28 listings -- the model keeps reaching for it
+	despite the rules, and no product data substantiates it. Every other restricted
+	term, and anything that needs rewriting (length, structure, a missing
+	description), stays with the model. If trimming leaves no keywords at all,
+	`validate` says so and the model writes new ones.
+	"""
+	listing = dict(listing or {})
+	for field in ("title", "description"):
+		if isinstance(listing.get(field), str):
+			listing[field] = _soften(listing[field])
+	if isinstance(listing.get("bullet_points"), list):
+		listing["bullet_points"] = [_soften(b) if isinstance(b, str) else b for b in listing["bullet_points"]]
+	if isinstance(listing.get("keywords"), list):
+		listing["keywords"] = [_soften(k) if isinstance(k, str) else k for k in listing["keywords"]]
+
+	keywords = listing.get("keywords")
+	if not isinstance(keywords, list):
+		return listing
+
+	title = str(listing.get("title") or "")
+	bullets = [str(b or "") for b in (listing.get("bullet_points") or [])]
+	spent = set(_WORD.findall(title.lower()))
+	for bullet in bullets:
+		spent |= set(_WORD.findall(bullet.lower()))
+
+	def fresh(token):
+		return not any(word in spent and len(word) > 2 for word in _WORD.findall(token.lower()))
+
+	cleaned, seen = [], set()
+	for keyword in keywords:
+		tokens = [t for t in str(keyword or "").split() if fresh(t)]
+		for part in _split_row(tokens):
+			key = part.lower()
+			if part and key not in seen:
+				seen.add(key)
+				cleaned.append(part)
+
+	while cleaned and len(" ".join(cleaned).encode("utf-8")) > KEYWORD_BYTE_BUDGET:
+		last = cleaned[-1].split()
+		if len(last) > 1:
+			cleaned[-1] = " ".join(last[:-1])
+		else:
+			cleaned.pop()
+
+	listing["keywords"] = cleaned
+	return listing
+
+
+_PERFECT = re.compile(r"\b(an?\s+)?(perfect)\b", re.IGNORECASE)
+
+
+def _soften(text):
+	"""`text` with "perfect" replaced by "ideal", matching case and fixing the article."""
+
+	def swap(match):
+		article, word = match.group(1), match.group(2)
+		ideal = "IDEAL" if word.isupper() else "Ideal" if word[0].isupper() else "ideal"
+		if not article:
+			return ideal
+		a = article.rstrip()
+		# Cased off the word, not the article: a lone "A" is upper case either way.
+		an = "AN" if word.isupper() else "An" if a[0].isupper() else "an"
+		return f"{an}{article[len(a):]}{ideal}"
+
+	return _PERFECT.sub(swap, text)
+
+
+def _split_row(tokens):
+	"""Whitespace tokens joined into terms no longer than a keyword row holds."""
+	parts, current = [], ""
+	for token in tokens:
+		candidate = f"{current} {token}".strip()
+		if len(candidate) > KEYWORD_ROW_MAX and current:
+			parts.append(current)
+			current = token[:KEYWORD_ROW_MAX]
+		else:
+			current = candidate[:KEYWORD_ROW_MAX]
+	if current:
+		parts.append(current)
+	return parts
 
 
 def validate(listing):
