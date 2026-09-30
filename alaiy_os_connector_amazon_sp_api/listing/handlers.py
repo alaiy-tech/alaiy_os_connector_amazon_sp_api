@@ -157,6 +157,95 @@ def item_variant_specs(item_code):
 	return out
 
 
+#: The custom field the sourcing app puts the supplier's specification table on,
+#: `{name: [values]}` as the supplier lists it. Absent on a bench without that app.
+_ITEM_ATTRIBUTES_FIELD = "ng_attributes_json"
+
+#: Supplier fields that are not facts about the product, or would be wrong in the
+#: copy: the supplier's own brand (a listing sells under the house brand), its item
+#: number, and its trade terms -- where it sells, whether it exports, takes custom
+#: orders, licenses brands, delivers or installs, whether it is patented, where it
+#: ships from. Matched by pattern rather than by exact name, because the table
+#: arrives machine-translated and one question comes in many wordings ("Whether to
+#: export", "Is it for foreign trade?", "There are authorizable private brands").
+_SKIPPED_ATTRIBUTE_MARKERS = (
+	"brand", "item n", "model n", "customi", "downstream", "sales area", "export",
+	"import", "foreign trade", "patent", "licens", "authori", "deliver",
+	"installation service", "origin", "attribute ",
+)
+#: A yes/no question about the supplier, never a spec: "Whether to ...", "Is it ...".
+_SKIPPED_ATTRIBUTE_PREFIXES = ("whether", "is it", "is the", "there are", "there is")
+
+
+def _is_product_fact(name):
+	"""False for a supplier field that is trade terms rather than a product fact."""
+	folded = name.casefold()
+	return not (
+		folded.startswith(_SKIPPED_ATTRIBUTE_PREFIXES)
+		or any(marker in folded for marker in _SKIPPED_ATTRIBUTE_MARKERS)
+	)
+
+
+#: Values shown per specification. A family's colour list can run to dozens of
+#: options, which say nothing about THIS variant and only cost context.
+_MAX_ATTRIBUTE_VALUES = 6
+
+
+def item_product_specs(item_code):
+	"""The supplier's specification table for the linked Item, as {name: "a, b"}.
+
+	What the agent was missing: without it, a listing has only its title and photos
+	to go on, so materials were guessed and everything else was flagged for review
+	although the supplier had sent it. Guarded like `_item_specs` -- the field belongs
+	to the sourcing app. Skips fields that are not product facts, and fields that are
+	this variant's own axes, which `variant_specifications` already gives exactly.
+	"""
+	import json
+
+	if not item_code or not frappe.db.has_column("Item", _ITEM_ATTRIBUTES_FIELD):
+		return {}
+	raw = frappe.db.get_value("Item", item_code, _ITEM_ATTRIBUTES_FIELD)
+	try:
+		table = json.loads(raw) if raw else {}
+	except (ValueError, TypeError):
+		return {}
+	if not isinstance(table, dict):
+		return {}
+
+	axes = {name.casefold() for name in item_variant_specs(item_code)}
+	out = {}
+	for name, values in table.items():
+		name = str(name or "").strip()
+		if not name or not _is_product_fact(name) or name.casefold() in axes:
+			continue
+		values = values if isinstance(values, list) else [values]
+		values = [str(v).strip() for v in values if str(v or "").strip()]
+		if not values:
+			continue
+		shown = ", ".join(values[:_MAX_ATTRIBUTE_VALUES])
+		if len(values) > _MAX_ATTRIBUTE_VALUES:
+			shown += f" (+{len(values) - _MAX_ATTRIBUTE_VALUES} more)"
+		out[name] = shown
+	return out
+
+
+def _item_weight(item_code):
+	"""The linked Item's weight in kg, or None. A spec the copy may state.
+
+	Only when the Item says kg, or says nothing -- the NayaGlobal feed sends kg and
+	leaves the unit unset. A weight in any other unit is left out rather than
+	converted on a guess.
+	"""
+	if not item_code:
+		return None
+	row = frappe.db.get_value("Item", item_code, ["weight_per_unit", "weight_uom"], as_dict=True)
+	if not row or not row.weight_per_unit:
+		return None
+	if row.weight_uom and row.weight_uom.strip().casefold() not in ("kg", "kgs", "kilogram"):
+		return None
+	return float(row.weight_per_unit)
+
+
 def _item_specs(item_code):
 	"""The linked Item's raw variant specs list, or [] when unavailable."""
 	import json
@@ -549,8 +638,11 @@ def get_product(sku):
 	Return an Amazon Product Listing's data plus its product photos as vision content
 	blocks. The listing's `name` is the seller SKU, so the caller's sku is used
 	directly as the listing name. The model receives a text block of the structured
-	data followed by one labelled image block per photo. Reads strictly from the
-	listing — never the underlying Item.
+	data followed by one labelled image block per photo. The listing is the record;
+	the one thing read off the underlying Item is what the supplier knows about the
+	product -- its variant specifications, its specification table and its weight --
+	because a listing drafted from a supplier's catalogue has nowhere else to carry
+	them.
 
 	The listing's open `issues` (Amazon's own suppression reasons and warnings) are
 	included deliberately: they are the closest thing to a brief this agent gets,
@@ -605,6 +697,8 @@ def get_product(sku):
 			row.get("keyword") for row in (listing.get("keywords") or []) if row.get("keyword")
 		],
 		"variant_specifications": item_variant_specs(listing.get("product")),
+		"product_specifications": item_product_specs(listing.get("product")),
+		"weight_kg": _item_weight(listing.get("product")),
 		"image_urls": listing_image_urls(listing),
 		"primary_image_url": primary_listing_image_url(listing),
 		"issues": [
@@ -649,12 +743,35 @@ def get_product(sku):
 			"text": (
 				"`variant_specifications` above is what the catalog actually records for "
 				"THIS variant. Every one of those values must appear naturally in the "
-				"title, the bullets and the description. Any specification NOT listed "
-				"there is not available — do not invent, assume or infer it; expand the "
-				"copy with features, functionality, applications and target users "
-				"instead, and add the missing field to needs_review."
+				"title, the bullets and the description."
 			),
 		})
+
+	if data["product_specifications"]:
+		blocks.append({
+			"type": "text",
+			"text": (
+				"`product_specifications` above is the supplier's own specification table "
+				"for the product (material, filler, style and the like), machine-translated "
+				"and often awkward. Use every value that applies — rewritten in clean "
+				"merchant English — in the bullets, the description and its summary "
+				"block, and in the title where it is a key spec. It lists options across "
+				"the whole product family: where it disagrees with "
+				"`variant_specifications`, the variant wins."
+			),
+		})
+
+	blocks.append({
+		"type": "text",
+		"text": (
+			"Any specification not in `variant_specifications`, `product_specifications` "
+			"or `weight_kg` above, and not clearly shown in the photos, is not available "
+			"— do not invent, assume or infer it; expand the copy with features, "
+			"functionality, applications and target users instead, and add the missing "
+			"field to needs_review. In the description's summary block, include only the "
+			"lines you have a value for; never leave a label empty."
+		),
+	})
 
 	if data["issues"]:
 		blocks.append({
