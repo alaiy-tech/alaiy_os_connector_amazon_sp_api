@@ -132,10 +132,16 @@ def _ensure_order_custom_fields():
 				"insert_after": "item_code",
 			},
 			{
+				# In the grid, not behind the row-expand: on an order whose lines
+				# book against the shared unmapped placeholder, every row reads
+				# "Amazon Unmapped Item" and the SKU is the only thing that tells
+				# them apart. A column nobody can see is one nobody checks.
 				"fieldname": "amazon_seller_sku",
 				"label": "Amazon Seller SKU",
 				"fieldtype": "Data",
 				"read_only": 1,
+				"in_list_view": 1,
+				"columns": 2,
 				"insert_after": "amazon_order_item_id",
 			},
 			{
@@ -147,6 +153,8 @@ def _ensure_order_custom_fields():
 				"fieldtype": "Data",
 				"read_only": 1,
 				"search_index": 1,
+				"in_list_view": 1,
+				"columns": 1,
 				"insert_after": "amazon_seller_sku",
 				"description": "Amazon's catalog identifier for this line, as reported on the order. Recorded even when the SKU isn't linked to an Item.",
 			},
