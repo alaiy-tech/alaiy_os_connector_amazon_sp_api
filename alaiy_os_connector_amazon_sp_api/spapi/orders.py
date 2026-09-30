@@ -307,25 +307,41 @@ def _money(node):
 
 
 def _merge_duplicate_rows(rows):
-	"""ERPNext rejects two rows with the same item_code on one Sales Order.
+	"""Collapse rows ERPNext would reject as the same line, and only those.
 
 	Amazon splits a single SKU across multiple order items routinely (partial
-	fulfilment, split shipments), so this is the normal case, not an edge one.
-	Qty is summed and the rate recomputed from the combined amount so the order
-	total is unchanged.
+	fulfilment, split shipments), and ERPNext refuses a Sales Order carrying the
+	same line twice unless Selling Settings allows it. Qty is summed and the rate
+	recomputed from the combined amount, so the order total is unchanged.
 
-	Per-line identifiers need care here. Merging two lines of the *same* SKU
-	keeps their shared ASIN, which is correct. But every unmapped line shares
-	the placeholder item_code, so a merge can span genuinely different products
-	— and carrying the first row's ASIN forward would label the merged row with
-	a product it only partly represents. Identifiers that disagree are dropped
-	rather than guessed, and the descriptions are concatenated so what was
-	actually sold is still legible on the row.
+	**The key is item_code AND description, because that is ERPNext's own rule.**
+	`validate_for_duplicate_items` compares `[item_code, description]` for a
+	non-stock item and adds the warehouse for a stock one, so two rows differing
+	in description are already two acceptable lines.
+
+	That distinction is the whole point here. Every unmapped SKU books against one
+	shared placeholder item_code, so keying on item_code alone merged *different
+	products* into a single line — summing quantities that were never of the same
+	thing, averaging their rates, and blanking `amazon_seller_sku` / `amazon_asin`
+	because the two rows disagreed. The result passed validation and balanced to
+	the right total while describing nothing that was actually sold, and it left
+	the SKUs legible only inside a concatenated description. An order of three
+	unmapped SKUs arrived as one anonymous line of quantity 3.
+
+	The placeholder rows carry a per-SKU description already (`_order_item_rows`
+	builds "<title> | SKU: … | ASIN: …"), so including it in the key is enough:
+	different SKUs stay separate lines keeping their own identifiers and
+	quantities, and two rows of the *same* SKU still merge, which is what the
+	split-shipment case needs.
+
+	Identifiers that disagree across a real merge are still dropped rather than
+	guessed — two order items of one SKU have different OrderItemIds, and picking
+	the first would label the line with half of itself.
 	"""
 	merged = {}
 	order = []
 	for row in rows:
-		key = row["item_code"]
+		key = (row["item_code"], row.get("description") or "")
 		if key not in merged:
 			merged[key] = dict(row)
 			order.append(key)
@@ -337,12 +353,6 @@ def _merge_duplicate_rows(rows):
 		for field in ("amazon_asin", "amazon_seller_sku", "amazon_order_item_id"):
 			if existing.get(field) != row.get(field):
 				existing[field] = None
-		for field in ("item_name", "description"):
-			incoming = row.get(field)
-			if incoming and incoming not in (existing.get(field) or ""):
-				joined = f"{existing.get(field) or ''}; {incoming}".strip("; ")
-				# item_name is a Data column; overflowing it fails the insert.
-				existing[field] = joined[:140] if field == "item_name" else joined
 	return [merged[key] for key in order]
 
 
