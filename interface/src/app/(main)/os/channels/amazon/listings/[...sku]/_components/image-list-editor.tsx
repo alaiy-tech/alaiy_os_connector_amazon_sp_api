@@ -1,11 +1,14 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import { Badge } from "@alaiy-os/ui/badge";
 import { Button } from "@alaiy-os/ui/button";
 import { Input } from "@alaiy-os/ui/input";
 import { cn } from "@alaiy-os/utils";
 import { ImageIcon, Plus, Star, Trash2 } from "lucide-react";
 
+import { listingImageViewLinks } from "@/lib/amazon/api";
 import type { AmazonPushImage } from "@/lib/amazon/types";
 
 /**
@@ -17,14 +20,33 @@ import type { AmazonPushImage } from "@/lib/amazon/types";
  * single `main_product_image_locator` and two mains is not a state it can be sent.
  */
 export function ImageListEditor({
+  sku,
   images,
   onChange,
   disabled = false,
 }: {
+  /** The listing the images belong to, for the links their thumbnails are drawn from. */
+  sku: string;
   images: AmazonPushImage[];
   onChange: (images: AmazonPushImage[]) => void;
   disabled?: boolean;
 }) {
+  // A produced image the site keeps in S3 is private: its stored URL is not one a
+  // browser can load. The server signs the listing's own images; a URL typed here is
+  // not among them and is shown as typed.
+  const [viewLinks, setViewLinks] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    listingImageViewLinks(sku)
+      .then((links) => {
+        if (!cancelled) setViewLinks(links);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [sku]);
+
   function setUrl(index: number, url: string) {
     onChange(images.map((image, position) => (position === index ? { ...image, url } : image)));
   }
@@ -57,7 +79,7 @@ export function ImageListEditor({
       {images.map((image, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: position is the identity — a blank row being typed into has no other one
         <div key={index} className="flex items-start gap-2">
-          <Thumbnail url={image.url} isMain={image.is_main} />
+          <Thumbnail url={viewLinks[image.url] ?? image.url} isMain={image.is_main} />
 
           <div className="min-w-0 flex-1 space-y-1">
             <Input

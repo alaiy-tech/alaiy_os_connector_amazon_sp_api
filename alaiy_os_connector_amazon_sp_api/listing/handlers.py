@@ -34,7 +34,6 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import frappe
-from frappe.utils.file_manager import save_file
 
 from alaiy_os_connector_amazon_sp_api.listing import brand as brands
 from alaiy_os_connector_amazon_sp_api.listing import product_type as product_types
@@ -436,16 +435,21 @@ def _process_one(client, public_url, ops):
 
 
 def _rehost(sku, role, content, mime):
-	"""Save a processed photo as a public File, so its url outlives the provider's.
+	"""Store a processed photo where the site keeps produced images, so its url outlives
+	the provider's: the site's S3 bucket when it has one, else a public File (see
+	`alaiy_os.image_store.save`). The url stored is the object's own, never a signed
+	link -- those expire, and this url is matched on and copied onto listings.
 
-	Must run on the main thread -- see `_process_one`. Not attached to the
-	Amazon Enriched Listing doctype/name (`dt`/`dn` left blank): the enriched
-	listing may not exist yet the first time this runs, since `save_listing`
+	Must run on the main thread -- see `_process_one`. Attached to no document: the
+	enriched listing may not exist yet the first time this runs, since `save_listing`
 	hasn't been called yet in the same agent turn.
 	"""
+	from alaiy_os import image_store
+
 	ext = mimetypes.guess_extension(mime) or ".jpg"
 	file_name = f"listing-{sku or 'url'}-{role}-{uuid4().hex}{ext}"
-	return save_file(file_name, content, None, None, is_private=0).file_url
+	category = image_store.GENERATED if role == "main" else image_store.TRANSLATED
+	return image_store.save(file_name, content, mime, category=category, metadata={"sku": sku, "role": role})
 
 
 def prepare_images(product, translate=False, white_bg=False, generate=False, image_urls=None):

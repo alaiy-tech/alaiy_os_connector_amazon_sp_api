@@ -865,6 +865,18 @@ def update_listing(sku, changes, marketplace=None):
 
 
 @frappe.whitelist()
+def listing_image_view_links(sku):
+	"""Links a browser can show for one listing's images, `{image_url: link}`.
+
+	See `listing.review.listing_image_view_links`: a produced image the site keeps in
+	S3 is private, so a thumbnail needs a signed link.
+	"""
+	from alaiy_os_connector_amazon_sp_api.listing import review
+
+	return review.listing_image_view_links(sku)
+
+
+@frappe.whitelist()
 def preview_publish(sku, desired=None, marketplace=None):
 	"""What publishing this row would do — create the offer, or push a diff.
 

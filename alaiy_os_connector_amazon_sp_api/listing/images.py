@@ -78,19 +78,35 @@ def fetch_image_block(image_url):
 	return _block(content, mime)
 
 
+def _stored_block(url):
+	"""A vision block for an image the site holds -- in its S3 bucket or as a local
+	File -- read with the site's own access, or None. A stored S3 object is private, so
+	a plain HTTP GET of its URL is refused; this is how the model still sees it."""
+	from alaiy_os import image_store
+
+	try:
+		stored = image_store.read(url)
+	except Exception:
+		return None
+	if not stored:
+		return None
+	content, mime = stored
+	return _block(content, mime or media_type(url) or "image/jpeg")
+
+
 def image_block_from_url(url):
 	"""A vision block for an image URL on a listing row, or None if unreadable.
 
-	Resolves a site-relative Frappe File url ('/files/x.jpg', which is not
-	HTTP-fetchable on its own) by reading the File directly, and an external
-	http(s) url by downloading it. Returns None rather than raising: one photo
-	that cannot be read must not take a whole enrichment down with it.
+	An image the site holds -- an object in its bucket, or a site-relative File like
+	'/files/x.jpg', neither HTTP-fetchable on its own -- is read with the site's own
+	access, and an external http(s) url is downloaded. Returns None rather than
+	raising: one photo that cannot be read must not take a whole enrichment down with it.
 	"""
 	if not url:
 		return None
-	file_name = frappe.db.get_value("File", {"file_url": url}, "name")
-	if file_name:
-		return image_block_from_file(file_name)
+	block = _stored_block(url)
+	if block:
+		return block
 	if url.startswith("http"):
 		try:
 			return fetch_image_block(url)
@@ -105,26 +121,23 @@ def reference_source(url):
 	Raises where `image_block_from_url` returns None, because a caller asking for
 	a reference has nothing to fall back on — it wanted *this* photo.
 	"""
-	file_name = frappe.db.get_value("File", {"file_url": url}, "name")
-	if file_name:
-		block = image_block_from_file(file_name)
-		if block:
-			return block["source"]
+	block = _stored_block(url)
+	if block:
+		return block["source"]
 	return fetch_image_block(url)["source"]
 
 
 def public_image_url(url):
-	"""An absolute URL a third party can fetch for itself.
+	"""An absolute URL a third party -- Amazon, an image service -- can fetch for itself.
 
-	A supplier CDN photo is already absolute and passes straight through. One
-	stored as a local Frappe File is only a site-relative path, so it is expanded
-	against the site URL — which only actually resolves when the site is reachable
-	from the public internet, so a local or dev site will fail for any service that
-	fetches the image itself.
+	See `alaiy_os.image_store.fetchable_url`: an object in the site's bucket comes back
+	presigned, a local File is moved to the bucket on first use and presigned (or, on a
+	site with no bucket, expanded against the site URL), and a supplier CDN photo passes
+	straight through.
 	"""
-	if url.startswith("http://") or url.startswith("https://"):
-		return url
-	return frappe.utils.get_url(url)
+	from alaiy_os import image_store
+
+	return image_store.fetchable_url(url)
 
 
 def _block(content, mime):

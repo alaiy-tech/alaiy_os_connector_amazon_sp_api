@@ -480,7 +480,12 @@ export function ListingDetail({ sku }: { sku: string }) {
 
           <div className="space-y-2">
             <Label>Images</Label>
-            <ImageListEditor images={form.images} onChange={(images) => set("images", images)} disabled={busy} />
+            <ImageListEditor
+              sku={sku}
+              images={form.images}
+              onChange={(images) => set("images", images)}
+              disabled={busy}
+            />
           </div>
         </CardContent>
       </Card>
