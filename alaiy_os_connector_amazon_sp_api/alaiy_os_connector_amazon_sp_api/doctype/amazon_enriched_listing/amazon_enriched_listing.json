@@ -30,6 +30,7 @@
   "review_section",
   "needs_review",
   "notes",
+  "attributes_json",
   "raw_section",
   "bullets_json",
   "keywords_json",
@@ -203,6 +204,13 @@
    "label": "Notes"
   },
   {
+   "fieldname": "attributes_json",
+   "fieldtype": "Code",
+   "label": "Product Attributes",
+   "options": "JSON",
+   "description": "Product facts the product type requires, as the agent answered them and shaped for this product type. Approval adds each one the listing's Extra Attributes does not already have."
+  },
+  {
    "collapsible": 1,
    "fieldname": "raw_section",
    "fieldtype": "Section Break",
@@ -243,7 +251,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-11 00:00:00",
+ "modified": "2026-10-08 12:00:00",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Enriched Listing",

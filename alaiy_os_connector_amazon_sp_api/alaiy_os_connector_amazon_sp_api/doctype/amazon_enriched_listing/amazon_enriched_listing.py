@@ -96,9 +96,29 @@ class AmazonEnrichedListing(Document):
 		self._sync_bullets(listing_doc)
 		self._sync_keywords(listing_doc)
 		self._sync_images(listing_doc)
+		self._sync_attributes(listing_doc)
 
 		listing_doc.save(ignore_permissions=True)
 		frappe.db.commit()
+
+	def _sync_attributes(self, listing_doc):
+		"""Add the reviewed product facts to the listing's Extra Attributes.
+
+		Only those it does not already have: a value an operator wrote, or a seller
+		declaration, is theirs. Extra Attributes is read only when a new catalog entry
+		is created, so a listing on an existing ASIN carries them unused.
+		"""
+		from alaiy_os_connector_amazon_sp_api.listing import attributes
+
+		try:
+			shaped = frappe.parse_json(self.attributes_json) if self.attributes_json else None
+		except Exception:
+			frappe.throw("Product Attributes is not valid JSON. Correct it before approving.")
+		if not shaped:
+			return
+		merged = attributes.merged_into(listing_doc.get("extra_attributes"), shaped)
+		if merged is not None:
+			listing_doc.extra_attributes = merged
 
 	def _sync_product_type(self, listing_doc):
 		"""Publish the reviewed product type onto the listing.
