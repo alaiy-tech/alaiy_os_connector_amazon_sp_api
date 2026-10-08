@@ -111,13 +111,11 @@ def image_view_links(sku):
 	read access — and it is kept because the property is worth keeping whatever
 	the storage is.
 
-	Today it mostly passes urls through. The image *producing* step and its S3
-	store did not migrate with the doctype, so an enrichment's images are supplier
-	CDN photos or local Files: absolute urls come back unchanged, and a
-	site-relative File path is expanded against the site url. A row's own url is
-	usually null, because no image step ran. The client can still look every row
-	up here without deciding which backend each came from, which is the point of
-	the endpoint.
+	A produced image in the site's S3 bucket is private, so it comes back as a
+	signed link; a local File or a supplier CDN photo comes back unchanged, since the
+	browser already loads those (`alaiy_os.image_store.viewable_url`). The client can
+	look every row up here without deciding which backend each came from, which is the
+	point of the endpoint.
 
 	A sku with no enriched listing answers `{}` rather than throwing: a form may
 	ask while a run is still in flight, and there is nothing to show then.
@@ -128,11 +126,24 @@ def image_view_links(sku):
 	doc = frappe.get_doc(ENRICHED_DOCTYPE, sku)
 	doc.check_permission("read")
 
-	from alaiy_os_connector_amazon_sp_api.listing import images
+	from alaiy_os import image_store
 
-	links = {}
-	for row in doc.images or []:
-		for url in (row.source_url, row.url):
-			if url and url not in links:
-				links[url] = images.public_image_url(url)
-	return links
+	return image_store.viewable_urls(url for row in doc.images or [] for url in (row.source_url, row.url))
+
+
+@frappe.whitelist()
+def listing_image_view_links(sku):
+	"""Viewable links for one Amazon Product Listing's images -- `{image_url: link}`.
+
+	The listing's own image rows hold produced images after an enrichment is approved,
+	and those are private objects when the site stores images in S3. Scoped to one
+	listing the caller may read, for the reason `image_view_links` gives.
+	"""
+	if not frappe.db.exists("Amazon Product Listing", sku):
+		return {}
+	doc = frappe.get_doc("Amazon Product Listing", sku)
+	doc.check_permission("read")
+
+	from alaiy_os import image_store
+
+	return image_store.viewable_urls(row.image_url for row in doc.images or [])

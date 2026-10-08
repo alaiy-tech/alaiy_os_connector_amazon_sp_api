@@ -261,18 +261,27 @@ def _normalize_images(images):
 
 
 def _image_attributes(mp, images):
-	"""{attr_name: [locator]} for the main image + up to 8 additional images."""
+	"""{attr_name: [locator]} for the main image + up to 8 additional images.
+
+	Amazon fetches each `media_location` itself, so every URL goes out as one it can
+	fetch (`listing.images.public_image_url`): a produced image in the site's bucket is
+	private and is signed here, and a local File's site-relative path, which Amazon
+	refuses as an invalid URL, is moved to the bucket and signed. Signed only here, at
+	the moment of sending: what is stored, compared and written back stays the plain URL.
+	"""
+	from alaiy_os_connector_amazon_sp_api.listing.images import public_image_url
+
 	norm = _normalize_images(images)
 	if not norm:
 		return {}
 	out = {
 		"main_product_image_locator": [
-			{"marketplace_id": mp.marketplace_id, "media_location": norm[0]["url"]}
+			{"marketplace_id": mp.marketplace_id, "media_location": public_image_url(norm[0]["url"])}
 		]
 	}
 	for i, im in enumerate(norm[1:9], start=1):
 		out[f"other_product_image_locator_{i}"] = [
-			{"marketplace_id": mp.marketplace_id, "media_location": im["url"]}
+			{"marketplace_id": mp.marketplace_id, "media_location": public_image_url(im["url"])}
 		]
 	return out
 

@@ -538,6 +538,13 @@ export function publishListings(skus: string[], marketplace?: string): Promise<A
  * Costs one product-type definitions call (cached server-side) and writes
  * nothing. For a row that cannot go, `blockers` is the entire answer.
  */
+/** Links a browser can show for one listing's images, keyed by the stored URL. A
+ * produced image kept in S3 is private, so its thumbnail needs a signed link; any
+ * other URL comes back as it was. */
+export function listingImageViewLinks(sku: string): Promise<Record<string, string>> {
+  return get<Record<string, string>>("listing_image_view_links", { sku }, "Could not load the listing's images.");
+}
+
 export function previewAsinCreation(sku: string, marketplace?: string): Promise<AmazonAsinCreatePreview> {
   return get<AmazonAsinCreatePreview>(
     "preview_asin_creation",
