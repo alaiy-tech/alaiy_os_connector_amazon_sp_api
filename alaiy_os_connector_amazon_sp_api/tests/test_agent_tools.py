@@ -92,7 +92,7 @@ class TestPackManifest(UnitTestCase):
 		"""
 		export = agent_export.export()
 		self.assertEqual(
-			set(export), {"agent_id", "label", "icon", "description", "rules", "tools"}
+			set(export), {"agent_id", "label", "description", "rules", "tools"}
 		)
 		self.assertTrue(export["rules"].strip())
 		self.assertEqual(len(export["tools"]), len(agent_export.TOOLS))
@@ -109,7 +109,6 @@ class TestPackManifest(UnitTestCase):
 			"system_prompt",
 			"output_format",
 			"output_schema",
-			"chat_skill",
 		):
 			self.assertNotIn(owned_elsewhere, export)
 		self.assertFalse(hasattr(agent_export, "MODEL"))

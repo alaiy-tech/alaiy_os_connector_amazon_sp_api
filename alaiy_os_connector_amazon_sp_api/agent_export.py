@@ -156,10 +156,9 @@ _APP = "alaiy_os_connector_amazon_sp_api"
 _APP_DIR = Path(__file__).resolve().parent
 
 # The OS Agent Registry primary key, and what OS Agent Run records per run. Also
-# the slug `/amazon_sp_api` and the name `run_agent` is handed in Ask Alaiy.
+# the name `run_agent` is handed in Ask Alaiy.
 AGENT_ID = "amazon_sp_api"
 AGENT_NAME = "Amazon (SP-API)"
-AGENT_ICON = "shopping-cart"
 
 # The OS Connector Registry id from connector_meta. Every tool row carries it, so
 # factory.py refuses to build this pack while the connector is disabled — see the
@@ -1114,7 +1113,6 @@ def export():
 	return {
 		"agent_id": AGENT_ID,
 		"label": AGENT_NAME,
-		"icon": AGENT_ICON,
 		"description": DESCRIPTION,
 		"rules": read_text("prompts/rules.md"),
 		"tools": [_export_tool(tool) for tool in TOOLS],
