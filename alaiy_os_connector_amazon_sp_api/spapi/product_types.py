@@ -22,13 +22,22 @@ product: having settled on a product type, which attributes does Amazon require
 before it will mint an ASIN under it? That is `getDefinitionsProductType` with
 requirements=LISTING, and it is what separates creating a catalog entry from
 publishing an offer against someone else's.
+
+`definition_problems` checks a payload against that definition before anything
+is sent: the whole of it, not only its top-level `required` list. Most of what a
+product type requires is conditional — on the marketplace, on another attribute
+being present — and Amazon's rejection of an incomplete payload is the slow,
+public way to find that out.
 """
 
+import json
 from urllib.parse import quote
 
 import frappe
 import requests
 from frappe import _
+from jsonschema import Draft201909Validator, validators
+from jsonschema.exceptions import ValidationError, best_match
 
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
@@ -236,6 +245,33 @@ def attribute_example(schema, name, marketplace_id):
 	return _example_object(prop, marketplace_id)
 
 
+def attribute_value(schema, name, value, marketplace_id, language=None):
+	"""`value` as the attribute `name` takes it under this definition, or None.
+
+	For a caller that knows WHAT to declare — a manufacturer, a warranty period —
+	but not how a product type spells it. Attributes are not one shape: one requires
+	`language_tag` and another refuses it, a warranty period is `{value, unit}`, an
+	HSN code is `{entity, value}`. Read off the definition, the shape stays right as
+	Amazon changes it.
+
+	`value` is a plain value (wrapped as `{"value": value}`) or a dict of the item's
+	own keys. `marketplace_id` and `language_tag` are added where the item has them
+	and the caller did not set them. None when the product type has no such
+	attribute: declaring it anyway would be refused.
+	"""
+	prop = ((schema or {}).get("properties") or {}).get(name)
+	if not prop:
+		return None
+	spec = prop.get("items") if prop.get("type") == "array" else prop
+	keys = (spec or {}).get("properties") or {}
+	entry = dict(value) if isinstance(value, dict) else {"value": value}
+	if "marketplace_id" in keys:
+		entry.setdefault("marketplace_id", marketplace_id)
+	if "language_tag" in keys and language:
+		entry.setdefault("language_tag", language)
+	return [entry] if prop.get("type") == "array" else entry
+
+
 def _example_object(spec, marketplace_id):
 	"""One object in an attribute's value, filled with placeholders."""
 	properties = (spec or {}).get("properties") or {}
@@ -262,3 +298,160 @@ def _example_object(spec, marketplace_id):
 		else:
 			out[key] = ""
 	return out
+
+
+# --- checking a payload against the definition ---------------------------------
+# Amazon's definitions are JSON Schema Draft 2019-09 plus a vocabulary of its own.
+# Three of its keywords validate (the rest are labels for a UI): the ones below,
+# implemented as Amazon's reference validator implements them. Ignoring them is not
+# neutral — `maxUniqueItems` is what refuses several `generic_keyword` entries, and
+# a check without it passes a payload Amazon then rejects.
+#
+# `$schema` names Amazon's meta-schema by a URI that is an identifier, not an
+# address, so the Draft 2019-09 validator is used directly rather than looked up
+# from it.
+
+
+def _max_unique_items(validator, limit, instance, schema):
+	"""At most `limit` items may share the same values for the schema's `selectors`.
+
+	Not uniqueness, despite the name: Amazon's reference validator groups the items
+	by their selector values and fails when any group is larger than the limit.
+	Without selectors every item is in one group, so the limit is on the whole array.
+	"""
+	if not validator.is_type(instance, "array"):
+		return
+	selectors = schema.get("selectors") or []
+	groups = {}
+	for item in instance:
+		values = {key: item.get(key) for key in selectors} if isinstance(item, dict) else {}
+		key = json.dumps(values, sort_keys=True, default=str)
+		groups[key] = groups.get(key, 0) + 1
+	worst = max(groups.values(), default=0)
+	if worst > limit:
+		yield ValidationError(
+			_("At most {0} value(s) are allowed here, but {1} are sent.").format(limit, worst),
+			validator="maxUniqueItems",
+		)
+
+
+def _max_utf8_byte_length(validator, limit, instance, schema):
+	if validator.is_type(instance, "string") and len(instance.encode("utf-8")) > limit:
+		yield ValidationError(
+			_("Longer than the {0} bytes allowed ({1} bytes).").format(limit, len(instance.encode("utf-8"))),
+			validator="maxUtf8ByteLength",
+		)
+
+
+def _min_utf8_byte_length(validator, limit, instance, schema):
+	if validator.is_type(instance, "string") and len(instance.encode("utf-8")) < limit:
+		yield ValidationError(
+			_("Shorter than the {0} bytes required.").format(limit),
+			validator="minUtf8ByteLength",
+		)
+
+
+DefinitionValidator = validators.extend(
+	Draft201909Validator,
+	{
+		"maxUniqueItems": _max_unique_items,
+		"maxUtf8ByteLength": _max_utf8_byte_length,
+		"minUtf8ByteLength": _min_utf8_byte_length,
+	},
+)
+
+
+def definition_problems(attributes, schema):
+	"""Everything in `attributes` the product type's definition refuses.
+
+	Returns [{attribute, path, missing, message}], one per distinct problem:
+	`missing` is True for an attribute that must be present and is not, the case a
+	caller can turn into "fill in this field"; everything else is an attribute that
+	is present but wrong, with `message` saying how. `path` locates the value inside
+	the attribute (`brand[0].language_tag`), for a caller that wants to be exact.
+
+	Empty for a payload the definition accepts, and for no definition at all — the
+	absence of a definition is its own answer, and the caller already gives it.
+	"""
+	if not schema:
+		return []
+	found, seen = [], set()
+	for error in DefinitionValidator(schema).iter_errors(attributes or {}):
+		for problem in _problems_from(error, schema):
+			key = (problem["path"], problem["message"])
+			if key not in seen:
+				seen.add(key)
+				found.append(problem)
+	return found
+
+
+def _problems_from(error, schema):
+	"""One validation error as the problems an operator can act on.
+
+	A top-level `required` error is a missing attribute, named one at a time — a
+	conditional rule's `then` can require several at once. A composite error
+	(`anyOf`, `oneOf`) stands for whichever branch came closest, because its own
+	message is a repr of the whole payload.
+	"""
+	path = list(error.absolute_path)
+	if error.validator == "required" and not path and isinstance(error.instance, dict):
+		for name in error.validator_value or []:
+			if name not in error.instance:
+				yield {
+					"attribute": name,
+					"path": name,
+					"missing": True,
+					"message": _("'{0}' ({1}) is required.").format(attribute_title(schema, name), name),
+				}
+		return
+	if error.context and error.validator in ("anyOf", "oneOf"):
+		yield from _problems_from(best_match(error.context), schema)
+		return
+
+	name = path[0] if path and isinstance(path[0], str) else None
+	where = _path_text(path)
+	yield {
+		"attribute": name,
+		"path": where,
+		"missing": False,
+		"message": _("'{0}' ({1}): {2}").format(
+			attribute_title(schema, name) if name else _("Listing"), where or name or "", _error_text(error)
+		),
+	}
+
+
+def _path_text(path):
+	"""`["brand", 0, "language_tag"]` as `brand[0].language_tag`."""
+	text = ""
+	for part in path:
+		text += f"[{part}]" if isinstance(part, int) else (f".{part}" if text else str(part))
+	return text
+
+
+#: Long enough for an enum list or a short value, short enough that a whole
+#: attribute's repr — which several of jsonschema's messages embed — does not
+#: become the message.
+ERROR_TEXT_LIMIT = 240
+
+
+def _error_text(error):
+	"""jsonschema's message, in the terms of what was wrong rather than its repr."""
+	if error.validator == "required" and isinstance(error.instance, dict):
+		missing = [n for n in error.validator_value or [] if n not in error.instance]
+		return _("missing {0}.").format(", ".join(missing))
+	if error.validator == "enum":
+		allowed = [str(v) for v in error.validator_value or []]
+		shown = ", ".join(allowed[:8]) + (_(" and {0} more").format(len(allowed) - 8) if len(allowed) > 8 else "")
+		return _("{0} is not an accepted value. Accepted: {1}.").format(json.dumps(error.instance, default=str), shown)
+	if error.validator in ("maxLength", "minLength") and isinstance(error.instance, str):
+		return _("{0} characters; the limit is {1} {2}.").format(
+			len(error.instance), _("at most") if error.validator == "maxLength" else _("at least"), error.validator_value
+		)
+	if error.validator in ("maxItems", "minItems") and isinstance(error.instance, list):
+		return _("{0} value(s) sent; {1} {2} allowed.").format(
+			len(error.instance), _("at most") if error.validator == "maxItems" else _("at least"), error.validator_value
+		)
+	if error.validator == "additionalProperties":
+		return _("not an attribute this product type has. ") + error.message[:ERROR_TEXT_LIMIT]
+	message = error.message
+	return message if len(message) <= ERROR_TEXT_LIMIT else message[: ERROR_TEXT_LIMIT - 1] + "…"

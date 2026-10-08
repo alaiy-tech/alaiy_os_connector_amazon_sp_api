@@ -25,6 +25,11 @@
     "null"
    ],
    "description": "Which of this deployment's own house brands this product belongs under -- see `## HOUSE BRAND` in the system prompt, where they are named and their coverage described. Decided BEFORE the title, which opens with this brand name. Never derived from the product's category or Item Group. Use the exact brand name as given in the prompt. Answer null only after checking the product against every named brand's coverage and finding it outside all of them, or when the prompt names no house brands at all -- and when you do, say in `notes` which brands you ruled out and why. A brand named for a product outside its coverage is worse than null, because the title is built on it."
+  },
+  "attributes": {
+   "type": "object",
+   "description": "The product facts Amazon requires for this product type, when get_product lists them: {attribute name: value}, each value the listed `fill` with its blanks filled (or a plain value). Only facts the description, specifications or photos support; an accepted-values list is answered with one of its values exactly. Omit what you cannot determine and name it in needs_review. Never the brand, the manufacturer, contacts, warranty, origin or identifiers -- those are declared by the seller. Omit the whole object when get_product lists none.",
+   "additionalProperties": true
   }
  },
  "required": [

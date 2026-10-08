@@ -28,6 +28,7 @@
   "variation_theme",
   "offer_section",
   "price",
+  "mrp",
   "currency",
   "quantity",
   "column_break_offer",
@@ -204,6 +205,13 @@
    "options": "currency"
   },
   {
+   "fieldname": "mrp",
+   "fieldtype": "Currency",
+   "label": "Maximum Retail Price",
+   "options": "currency",
+   "description": "The MRP printed on the pack. Sent beside the price where the marketplace uses one (India); left out when blank."
+  },
+  {
    "fieldname": "currency",
    "fieldtype": "Link",
    "label": "Currency",
@@ -369,7 +377,7 @@
    "link_fieldname": "parent_listing"
   }
  ],
- "modified": "2026-08-28 00:00:00.000000",
+ "modified": "2026-10-08 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Product Listing",

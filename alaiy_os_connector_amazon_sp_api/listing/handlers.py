@@ -35,9 +35,9 @@ from uuid import uuid4
 
 import frappe
 
+from alaiy_os_connector_amazon_sp_api.listing import attributes, images
 from alaiy_os_connector_amazon_sp_api.listing import brand as brands
 from alaiy_os_connector_amazon_sp_api.listing import product_type as product_types
-from alaiy_os_connector_amazon_sp_api.listing import images
 
 # Cap how many photos we send to the model to keep token/latency cost bounded.
 MAX_IMAGES = 7
@@ -634,6 +634,45 @@ def _product_type_block(product_type):
 	)
 
 
+def _attributes_block(listing, product_type):
+	"""The product facts Amazon requires that this listing does not carry yet, or None.
+
+	Read off the product type's definition (`attributes.to_fill`). A listing with no
+	product type is asked against Amazon's best match for its current title — the
+	final type is settled from the finished title, and `save_listing` keeps only what
+	that type has. Only a listing with no ASIN is asked: an offer on an existing
+	catalog entry sends none of these.
+
+	Never raises. A definition that cannot be read means no question this run, not a
+	failed enrichment; the pre-check names what is missing before anything is sent.
+	"""
+	if listing.get("asin"):
+		return None
+	try:
+		provisional = product_type
+		if not provisional:
+			suggestions = product_types.suggest(listing.get("title"), marketplace=listing.get("marketplace"))
+			provisional = suggestions[0]["product_type"] if suggestions else None
+		wanted = attributes.to_fill(listing.name, provisional)
+	except Exception:
+		frappe.log_error(title="Amazon listing agent: attribute requirements unavailable")
+		return None
+	if not wanted:
+		return None
+	return (
+		"Amazon requires these product facts to create this product"
+		+ (f" as `{provisional}`" if provisional else "")
+		+ ". Answer each one in `attributes`, keyed by its `attribute` name, as the "
+		"`fill` value with its blanks filled in (a plain value where `fill` is not an "
+		"object). Use only what the description, the specifications and the photos "
+		"show; where `accepted` lists values, answer with one of them exactly. Leave "
+		"out any you cannot determine and name it in needs_review. Where you estimate "
+		"— dimensions, package weight, an HSN code — answer, and name the estimate in "
+		"needs_review so a reviewer checks it:\n"
+		+ frappe.as_json(wanted)
+	)
+
+
 # ── tools ─────────────────────────────────────────────────────────────────────
 
 
@@ -740,6 +779,10 @@ def get_product(sku):
 	product_type_note = _product_type_block(data["product_type"])
 	if product_type_note:
 		blocks.append({"type": "text", "text": product_type_note})
+
+	attributes_note = _attributes_block(listing, data["product_type"])
+	if attributes_note:
+		blocks.append({"type": "text", "text": attributes_note})
 
 	if data["variant_specifications"]:
 		blocks.append({
@@ -988,6 +1031,22 @@ def _save_brand(doc, listing, source_listing=None):
 		)
 
 
+def _save_attributes(doc, listing):
+	"""Keep the product facts the agent answered, as the final product type takes them.
+
+	After `_save_product_type`: the title may have moved the listing to a type other
+	than the one it was asked against, and only what that type has is kept. The rest
+	is said in `notes`, so a dropped answer is not mistaken for one never given.
+	Approval merges what is kept into the listing's Extra Attributes.
+	"""
+	shaped, dropped = attributes.shape(doc.sku, doc.product_type, listing.get("attributes"))
+	doc.attributes_json = frappe.as_json(shaped, indent=1) if shaped else None
+	if dropped:
+		doc.notes = "\n".join(
+			filter(None, [doc.notes, "Attributes not kept for this product type: " + ", ".join(dropped)])
+		)
+
+
 def save_listing(listing, sku=None):
 	"""
 	Persist an enriched listing into the shared Amazon Enriched Listing DocType for
@@ -1045,6 +1104,7 @@ def save_listing(listing, sku=None):
 	source_listing = get_listing(sku)
 	_save_product_type(doc, source_listing)
 	_save_brand(doc, listing, source_listing)
+	_save_attributes(doc, listing)
 
 	# the ordered content -> pretty JSON; whole payload kept verbatim for audit
 	doc.bullets_json = frappe.as_json(listing.get("bullet_points") or [])
