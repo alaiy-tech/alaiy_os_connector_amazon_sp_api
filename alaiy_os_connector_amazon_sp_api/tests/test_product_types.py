@@ -11,6 +11,8 @@ that does not cover ours must not be offered: publishing with it would fail.
 Pure transformation only — no SP-API calls.
 """
 
+from typing import ClassVar
+
 import frappe
 from frappe.tests import UnitTestCase
 
@@ -86,3 +88,90 @@ def _never_called():
 			raise AssertionError("SP-API must not be called for a blank title")
 
 	return _Client()
+
+
+class TestAttributeValue(UnitTestCase):
+	"""A value someone knows, in the shape the product type's definition gives it."""
+
+	MP = "A21TJRUUN4KGV"
+	SCHEMA: ClassVar[dict] = {
+		"properties": {
+			"manufacturer": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"value": {"type": "string"},
+						"language_tag": {"type": "string"},
+						"marketplace_id": {"type": "string"},
+					},
+				},
+			},
+			"country_of_origin": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {"value": {"type": "string"}, "marketplace_id": {"type": "string"}},
+				},
+			},
+			"base_product_mfg_warranty_period": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"value": {"type": "number"},
+						"unit": {"type": "string"},
+						"marketplace_id": {"type": "string"},
+					},
+				},
+			},
+		}
+	}
+
+	def value(self, name, value):
+		return product_types.attribute_value(self.SCHEMA, name, value, self.MP, "en_IN")
+
+	def test_a_text_attribute_is_language_tagged(self):
+		self.assertEqual(
+			self.value("manufacturer", "Maker"),
+			[{"value": "Maker", "marketplace_id": self.MP, "language_tag": "en_IN"}],
+		)
+
+	def test_an_attribute_without_a_language_gets_none(self):
+		self.assertEqual(self.value("country_of_origin", "HK"), [{"value": "HK", "marketplace_id": self.MP}])
+
+	def test_a_structured_value_keeps_its_keys(self):
+		self.assertEqual(
+			self.value("base_product_mfg_warranty_period", {"value": 0, "unit": "months"}),
+			[{"value": 0, "unit": "months", "marketplace_id": self.MP}],
+		)
+
+	def test_an_attribute_the_product_type_does_not_have_is_none(self):
+		self.assertIsNone(self.value("contains_liquid_contents", False))
+		self.assertIsNone(product_types.attribute_value(None, "manufacturer", "Maker", self.MP))
+
+
+class TestListingAttributeValues(UnitTestCase):
+	def test_values_are_shaped_for_the_listings_product_type(self):
+		from unittest.mock import patch
+
+		from alaiy_os_connector_amazon_sp_api.spapi import listings
+
+		row = frappe._dict(product_type="PET_TOY", marketplace="IN")
+		mp = frappe._dict(name="IN", marketplace_id=TestAttributeValue.MP, language="en_IN")
+		with (
+			patch.object(listings, "_register_row", return_value=row),
+			patch.object(listings, "_marketplace", return_value=mp),
+			patch.object(listings.product_types, "get_definition", return_value=TestAttributeValue.SCHEMA),
+		):
+			shaped = listings.attribute_values("SKU-1", {"manufacturer": "Maker", "unknown_attribute": "x"})
+		self.assertEqual(list(shaped), ["manufacturer"])
+		self.assertEqual(shaped["manufacturer"][0]["language_tag"], "en_IN")
+
+	def test_no_product_type_yet_is_nothing(self):
+		from unittest.mock import patch
+
+		from alaiy_os_connector_amazon_sp_api.spapi import listings
+
+		with patch.object(listings, "_register_row", return_value=frappe._dict(product_type=None)):
+			self.assertEqual(listings.attribute_values("SKU-1", {"manufacturer": "Maker"}), {})
