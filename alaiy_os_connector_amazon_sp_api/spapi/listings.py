@@ -38,13 +38,15 @@ from frappe import _
 from frappe.utils import cint, flt, now_datetime, strip_html
 
 from alaiy_os_connector_amazon_sp_api import connections
-
 from alaiy_os_connector_amazon_sp_api.spapi import catalog, product_types
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	CATALOG_ITEMS_PATH,
 	DEFAULT_ISSUE_LOCALE,
 	FULFILLMENT_CHANNEL_CODES,
+	KEYWORD_MAX_BYTES,
+	KEYWORD_MAX_LENGTH,
+	KEYWORD_SEPARATOR,
 	LISTINGS_ITEMS_BASE,
 )
 
@@ -187,6 +189,7 @@ def _offer_attributes(
 	bullets=None,
 	keywords=None,
 	images=None,
+	mrp=None,
 ):
 	"""Attributes for an offer-only listing against an existing ASIN."""
 	mp_id = mp.marketplace_id
@@ -205,7 +208,7 @@ def _offer_attributes(
 	if images:
 		attrs.update(_image_attributes(mp, images))
 	if price is not None:
-		attrs["purchasable_offer"] = _price_attribute(mp, price)
+		attrs["purchasable_offer"] = _price_attribute(mp, price, mrp)
 	if quantity is not None:
 		attrs["fulfillment_availability"] = _availability_attribute(quantity, fulfillment_channel)
 	return attrs
@@ -233,7 +236,23 @@ def _bullet_attribute(mp, bullets):
 
 
 def _keyword_attribute(mp, keywords):
-	return [_localized(mp, k) for k in (keywords or []) if k]
+	"""Every keyword in ONE value, not one value per keyword.
+
+	`generic_keyword` takes a single entry per marketplace and language: product type
+	definitions cap it with `maxUniqueItems: 1`, and Amazon rejects a second entry
+	outright (99016). A keyword that would take the value past the limit is left out
+	whole rather than cut in half.
+	"""
+	words = [k.strip() for k in (keywords or []) if k and k.strip()]
+	if not words:
+		return []
+	value = ""
+	for word in words:
+		candidate = f"{value}{KEYWORD_SEPARATOR}{word}" if value else word
+		if len(candidate) > KEYWORD_MAX_LENGTH or len(candidate.encode("utf-8")) > KEYWORD_MAX_BYTES:
+			break
+		value = candidate
+	return [_localized(mp, value or words[0][:KEYWORD_MAX_LENGTH])]
 
 
 def _normalize_images(images):
@@ -286,14 +305,25 @@ def _image_attributes(mp, images):
 	return out
 
 
-def _price_attribute(mp, price):
-	return [
-		{
-			"marketplace_id": mp.marketplace_id,
-			"currency": mp.currency,
-			"our_price": [{"schedule": [{"value_with_tax": flt(price)}]}],
-		}
-	]
+def _price_attribute(mp, price, mrp=None):
+	"""The selling price, with the printed MRP beside it when the row has one.
+
+	`purchasable_offer` is replaced whole by a price update, so whatever is not sent
+	here is removed from the listing: an update that sent only `our_price` would strip
+	the MRP an accepted listing carries. The MRP is sent only when one is set — it is
+	an India requirement (legal metrology), and other marketplaces' definitions do not
+	have the attribute.
+	"""
+	offer = {
+		"marketplace_id": mp.marketplace_id,
+		"currency": mp.currency,
+		# The definitions' own default, and what an accepted listing reads back with.
+		"audience": "ALL",
+		"our_price": [{"schedule": [{"value_with_tax": flt(price)}]}],
+	}
+	if flt(mrp) > 0:
+		offer["maximum_retail_price"] = [{"schedule": [{"value_with_tax": flt(mrp)}]}]
+	return [offer]
 
 
 def _availability_attribute(quantity, fulfillment_channel):
@@ -313,6 +343,7 @@ def create_listing(
 	marketplace=None,
 	fulfillment_channel="DEFAULT",
 	product=None,
+	mrp=None,
 ):
 	"""Publish an offer for an existing ASIN via PUT (LISTING_OFFER_ONLY)."""
 	conn = _connection()
@@ -332,6 +363,7 @@ def create_listing(
 			price=price,
 			quantity=quantity,
 			fulfillment_channel=fulfillment_channel,
+			mrp=mrp,
 		),
 	}
 	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
@@ -469,7 +501,7 @@ def update_listing(sku, changes, marketplace=None):
 			)
 		)
 
-	patches = _build_patches(mp, changes)
+	patches = _build_patches(mp, changes, mrp=frappe.db.get_value("Amazon Product Listing", sku, "mrp"))
 	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
 	body = {"productType": _stored_product_type(sku), "patches": patches}
 
@@ -542,7 +574,7 @@ def _apply_submitted_changes(sku, mp, changes, issues, response=None):
 	return {"sku": sku, "listing_status": row.listing_status, "issues": issues}
 
 
-def _build_patches(mp, changes):
+def _build_patches(mp, changes, mrp=None):
 	patches = []
 	if "title" in changes:
 		patches.append(
@@ -550,7 +582,7 @@ def _build_patches(mp, changes):
 		)
 	if "price" in changes:
 		patches.append(
-			{"op": "replace", "path": "/attributes/purchasable_offer", "value": _price_attribute(mp, changes["price"])}
+			{"op": "replace", "path": "/attributes/purchasable_offer", "value": _price_attribute(mp, changes["price"], mrp)}
 		)
 	if "quantity" in changes:
 		patches.append(
@@ -603,6 +635,7 @@ def _put_fallback(client, conn, mp, sku, changes):
 		bullets=changes["bullet_points"] if "bullet_points" in changes else _row_bullets(row),
 		keywords=changes["keywords"] if "keywords" in changes else _row_keywords(row),
 		images=changes["images"] if "images" in changes else _row_images(row),
+		mrp=row.get("mrp"),
 	)
 	body = {"productType": product_type, "attributes": attributes}
 	# Offer-only strips product content; only assert it when nothing content-ish changed.
@@ -908,7 +941,7 @@ def _content_from_item(item, summary, catalog_content=None):
 		"bullet_points": _own_attr_values(attributes, "bullet_point")
 		or catalog_content.get("bullets")
 		or [],
-		"keywords": _own_attr_values(attributes, "generic_keyword")
+		"keywords": catalog.split_keywords(_own_attr_values(attributes, "generic_keyword"))
 		or catalog_content.get("keywords")
 		or [],
 		"images": images,
@@ -1714,6 +1747,7 @@ def _create_from_row(row, mp, desired):
 			marketplace=mp.name,
 			fulfillment_channel=row.get("fulfillment_channel") or "DEFAULT",
 			product=row.get("product"),
+			mrp=row.get("mrp"),
 		)
 	)
 	result["action"] = "created"
@@ -1986,7 +2020,9 @@ def _catalog_attributes(mp, row, connection=None):
 	if row.get("title"):
 		attrs["item_name"] = _title_attribute(mp, row.get("title"))
 	if row.get("brand"):
-		attrs["brand"] = [{"marketplace_id": mp.marketplace_id, "value": row.get("brand")}]
+		# Language-tagged like every other text attribute: definitions require
+		# `language_tag` on brand, and a create without it is refused.
+		attrs["brand"] = [_localized(mp, row.get("brand"))]
 	if row.get("description"):
 		attrs["product_description"] = _description_attribute(mp, row.get("description"))
 	bullets = _row_bullets(row)
@@ -1999,7 +2035,7 @@ def _catalog_attributes(mp, row, connection=None):
 	if images:
 		attrs.update(_image_attributes(mp, images))
 	if row.get("price") is not None:
-		attrs["purchasable_offer"] = _price_attribute(mp, row.get("price"))
+		attrs["purchasable_offer"] = _price_attribute(mp, row.get("price"), row.get("mrp"))
 	if row.get("quantity") is not None:
 		attrs["fulfillment_availability"] = _availability_attribute(
 			row.get("quantity"), row.get("fulfillment_channel")
@@ -2043,6 +2079,13 @@ def asin_create_blockers(row, attributes, schema):
 	The difference is that most of this list is not ours to decide — it is read
 	off the product type's own schema, so the answer stays right as Amazon changes
 	what a product type requires.
+
+	The whole schema, not only its top-level `required`: a product type requires
+	most of its attributes conditionally (in this marketplace, when another
+	attribute is present), and a check that reads only the top level passes a
+	payload Amazon then rejects attribute by attribute. Values that are present
+	but malformed — two keyword entries where one is allowed, an enum value Amazon
+	does not know — are blockers too, for the same reason.
 	"""
 	blockers = []
 	if row.get("asin"):
@@ -2064,7 +2107,8 @@ def asin_create_blockers(row, attributes, schema):
 		return blockers
 	if not _clean_text(row.get("title")):
 		blockers.append(_("No title. It becomes the product's name in Amazon's catalog."))
-	if not any(name in attributes for name in _IDENTIFIER_ATTRIBUTES):
+	no_identifier = not any(name in attributes for name in _IDENTIFIER_ATTRIBUTES)
+	if no_identifier:
 		blockers.append(_identifier_blocker(row))
 
 	if schema is None:
@@ -2076,9 +2120,23 @@ def asin_create_blockers(row, attributes, schema):
 		)
 		return blockers
 
-	for name in missing_required(attributes, schema):
-		blockers.append(_missing_attribute_blocker(row, schema, name))
+	for problem in product_types.definition_problems(attributes, schema):
+		if not problem["missing"]:
+			blockers.append(
+				_("Amazon's definition of {0} refuses this listing: {1}").format(
+					row.get("product_type"), problem["message"]
+				)
+			)
+		elif not (no_identifier and problem["attribute"] in _IDENTIFIER_REQUIREMENTS):
+			# The identifier blocker above already says what to do about these, in
+			# one sentence rather than three.
+			blockers.append(_missing_attribute_blocker(row, schema, problem["attribute"]))
 	return blockers
+
+
+# What a definition requires when a product has no identifier: a barcode, an ASIN
+# to attach to, or an exemption. `_identifier_blocker` covers all three at once.
+_IDENTIFIER_REQUIREMENTS = (*_IDENTIFIER_ATTRIBUTES, "merchant_suggested_asin")
 
 
 # Required attributes a listing field already feeds, and the field that feeds
@@ -2101,8 +2159,16 @@ _ATTRIBUTE_FIELDS = {
 
 
 def missing_required(attributes, schema):
-	"""Required attribute names the submission would not carry."""
-	return [name for name in product_types.required_attributes(schema) if name not in attributes]
+	"""Required attribute names the submission would not carry.
+
+	Conditional requirements included: these are the names the definition's rules
+	ask for given what the payload does carry, not only its top-level list.
+	"""
+	names = []
+	for problem in product_types.definition_problems(attributes, schema):
+		if problem["missing"] and problem["attribute"] not in names:
+			names.append(problem["attribute"])
+	return names
 
 
 def _missing_attribute_blocker(row, schema, name):
@@ -2163,7 +2229,7 @@ def preview_asin_creation(sku, marketplace=None, connection=None):
 		"product_type": product_type,
 		"listing_status": row.get("listing_status"),
 		"attributes": attributes,
-		"required": product_types.required_attributes(schema),
+		"required": _required_names(attributes, schema),
 		"blockers": blockers,
 		"warnings": _create_warnings(row),
 		"ready": not blockers,
@@ -2198,6 +2264,12 @@ def attribute_values(sku, values, marketplace=None):
 		if shaped is not None:
 			out[name] = shaped
 	return out
+
+
+def _required_names(attributes, schema):
+	"""The definition's top-level required list, plus what its rules add for this payload."""
+	names = product_types.required_attributes(schema)
+	return names + [name for name in missing_required(attributes, schema) if name not in names]
 
 
 def _suggested_extra_attributes(mp, row, attributes, schema):
@@ -2248,18 +2320,43 @@ def create_asin(sku, marketplace=None):
 	# this section's header.
 	body = {"productType": product_type, "attributes": attributes}
 	params = {"marketplaceIds": mp.marketplace_id, "issueLocale": DEFAULT_ISSUE_LOCALE}
-
 	client = SpApiClient(conn)
-	try:
-		resp = client.put(
-			_seller_path(conn.selling_partner_id, sku), params=params, body=body, context="listing"
-		)
-	except SpApiError as e:
-		_handle_forbidden(e)
+	path = _seller_path(conn.selling_partner_id, sku)
 
-	issues = _issues_from(resp)
-	_raise_on_rejected_submission(resp, issues, _("product"))
+	# Amazon's own check first. The schema check above cannot see every rule Amazon
+	# applies (pricing rules among them), and a catalog entry is the one write that
+	# cannot be taken back: VALIDATION_PREVIEW runs the same validation "without
+	# persisting to the selling partner's catalog", so a payload it refuses is never
+	# submitted at all.
+	_send_creation(sku, client, path, {**params, "mode": "VALIDATION_PREVIEW"}, body, _("product (validation preview)"))
+	resp, issues = _send_creation(sku, client, path, params, body, _("product"))
 	return _record_submitted_creation(sku, resp, issues)
+
+
+def _send_creation(sku, client, path, params, body, action):
+	"""PUT one creation request; raise if Amazon refuses it — after keeping the refusal.
+
+	A raise rolls the request back, and with it everything written on the way: the
+	SP-API Log row of the call Amazon answered and anything noted on the listing. A
+	rejection would then leave no trace at all, and the next attempt starts from
+	nothing. So a refusal — an HTTP error or an INVALID answer — is written to
+	`last_publish_error` and committed, together with the log row, before it is
+	raised. Only a refusal: an accepted submission is the caller's transaction to
+	commit.
+
+	Returns (response, issues) for a request Amazon took.
+	"""
+	try:
+		response = client.put(path, params=params, body=body, context="listing")
+		issues = _issues_from(response)
+		_raise_on_rejected_submission(response, issues, action)
+	except (SpApiError, frappe.ValidationError) as e:
+		_record_publish(sku, published=False, error=_publish_error(e))
+		frappe.db.commit()  # the refusal has to outlive the rollback the raise causes
+		if isinstance(e, SpApiError):
+			_handle_forbidden(e)
+		raise
+	return response, issues
 
 
 def _record_submitted_creation(sku, response, issues):
