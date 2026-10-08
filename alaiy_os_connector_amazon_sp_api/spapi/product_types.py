@@ -236,6 +236,33 @@ def attribute_example(schema, name, marketplace_id):
 	return _example_object(prop, marketplace_id)
 
 
+def attribute_value(schema, name, value, marketplace_id, language=None):
+	"""`value` as the attribute `name` takes it under this definition, or None.
+
+	For a caller that knows WHAT to declare — a manufacturer, a warranty period —
+	but not how a product type spells it. Attributes are not one shape: one requires
+	`language_tag` and another refuses it, a warranty period is `{value, unit}`, an
+	HSN code is `{entity, value}`. Read off the definition, the shape stays right as
+	Amazon changes it.
+
+	`value` is a plain value (wrapped as `{"value": value}`) or a dict of the item's
+	own keys. `marketplace_id` and `language_tag` are added where the item has them
+	and the caller did not set them. None when the product type has no such
+	attribute: declaring it anyway would be refused.
+	"""
+	prop = ((schema or {}).get("properties") or {}).get(name)
+	if not prop:
+		return None
+	spec = prop.get("items") if prop.get("type") == "array" else prop
+	keys = (spec or {}).get("properties") or {}
+	entry = dict(value) if isinstance(value, dict) else {"value": value}
+	if "marketplace_id" in keys:
+		entry.setdefault("marketplace_id", marketplace_id)
+	if "language_tag" in keys and language:
+		entry.setdefault("language_tag", language)
+	return [entry] if prop.get("type") == "array" else entry
+
+
 def _example_object(spec, marketplace_id):
 	"""One object in an attribute's value, filled with placeholders."""
 	properties = (spec or {}).get("properties") or {}

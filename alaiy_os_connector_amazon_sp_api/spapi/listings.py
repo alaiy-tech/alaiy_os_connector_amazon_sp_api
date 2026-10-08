@@ -2175,6 +2175,31 @@ def preview_asin_creation(sku, marketplace=None, connection=None):
 	}
 
 
+def attribute_values(sku, values, marketplace=None):
+	"""`values` shaped for this listing's product type: {attribute: value as Amazon takes it}.
+
+	For a caller that declares facts in bulk — a manufacturer, a warranty — and writes
+	them into Extra Attributes. Each value is shaped by
+	`product_types.attribute_value`, and an attribute the product type does not have
+	is left out. Empty when the listing has no product type yet: there is nothing to
+	shape against, and the caller can ask again once there is.
+
+	Read-only: one (cached) definitions call, nothing written.
+	"""
+	row = _register_row(sku)
+	product_type = row.get("product_type")
+	if not product_type:
+		return {}
+	mp = _marketplace(marketplace or row.get("marketplace"))
+	schema = product_types.get_definition(product_type, marketplace=mp.name)
+	out = {}
+	for name, value in (values or {}).items():
+		shaped = product_types.attribute_value(schema, name, value, mp.marketplace_id, mp.get("language"))
+		if shaped is not None:
+			out[name] = shaped
+	return out
+
+
 def _suggested_extra_attributes(mp, row, attributes, schema):
 	"""A paste-ready Extra Attributes object for what this row still owes Amazon.
 
