@@ -32,6 +32,7 @@ from alaiy_os_connector_amazon_sp_api.spapi.constants import (
 	CATALOG_ITEMS_PATH,
 	CATALOG_MAX_IDENTIFIERS,
 	CATALOG_VARIATION_RELATIONSHIP,
+	KEYWORD_SEPARATOR,
 	PRODUCT_ID_PREFERENCE,
 )
 
@@ -72,6 +73,19 @@ def _attr_values(attributes, name, marketplace_id, language=None):
 		if preferred:
 			scoped = preferred
 	return [e["value"] for e in scoped if isinstance(e.get("value"), str) and e["value"].strip()]
+
+
+def split_keywords(values):
+	"""Keyword values as one keyword each, undoing the join `generic_keyword` needs.
+
+	A listing's keywords are sent as one value; read back, that value is split so the
+	register keeps one row per keyword, and a value written before the join (one per
+	keyword) passes through unchanged.
+	"""
+	out = []
+	for value in values or []:
+		out.extend(part.strip() for part in value.split(KEYWORD_SEPARATOR.strip()) if part.strip())
+	return out
 
 
 def _images_from(item, marketplace_id):
@@ -258,7 +272,7 @@ def content_from_item(item, mp):
 		"brand": (brands[0] if brands else None) or summary.get("brand") or None,
 		"description": descriptions[0] if descriptions else None,
 		"bullets": _attr_values(attributes, "bullet_point", marketplace_id, language),
-		"keywords": _attr_values(attributes, "generic_keyword", marketplace_id, language),
+		"keywords": split_keywords(_attr_values(attributes, "generic_keyword", marketplace_id, language)),
 		"images": images,
 		# The whole list, for a caller matching barcodes across channels, and the
 		# single pick the register row has one field for.
