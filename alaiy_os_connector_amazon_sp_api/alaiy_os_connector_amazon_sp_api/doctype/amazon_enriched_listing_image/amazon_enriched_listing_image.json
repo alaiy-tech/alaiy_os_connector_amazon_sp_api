@@ -36,7 +36,7 @@
    "columns": 3,
    "description": "The input photo this image was derived from, when there was one.",
    "fieldname": "source_url",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "Source URL",
    "options": "URL"
@@ -45,7 +45,7 @@
    "columns": 3,
    "description": "The resulting image. Empty when it could not be produced \u2014 see Note.",
    "fieldname": "url",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "URL",
    "options": "URL"
@@ -69,7 +69,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-08-05 00:00:00.000000",
+ "modified": "2026-10-08 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Enriched Listing Image",
