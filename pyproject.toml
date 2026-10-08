@@ -9,6 +9,8 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
+    # Checks a new catalog entry against its product type definition (Draft 2019-09).
+    "jsonschema>=4.18",
 ]
 
 [build-system]

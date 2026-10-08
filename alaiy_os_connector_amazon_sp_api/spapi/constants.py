@@ -129,6 +129,16 @@ CATALOG_VARIATION_RELATIONSHIP = "VARIATION"
 # defers is picked up by the next run.
 RECONCILE_CATALOG_BUDGET = 2000
 
+# `generic_keyword` is ONE value per marketplace and language (definitions cap it
+# with maxUniqueItems: 1), so a listing's keywords travel joined into one string and
+# are split back into rows when read. The separator is the one Amazon's own
+# definition example uses. The length limits are what product type definitions
+# declare for the value (maxLength / maxUtf8ByteLength); a definition stricter than
+# these is caught by the pre-check rather than here.
+KEYWORD_SEPARATOR = "; "
+KEYWORD_MAX_LENGTH = 500
+KEYWORD_MAX_BYTES = 2000
+
 # Locale for human-readable issue messages returned by the Listings API.
 DEFAULT_ISSUE_LOCALE = "en_US"
 
