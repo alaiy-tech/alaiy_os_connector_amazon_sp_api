@@ -41,6 +41,10 @@ MARKETPLACE_PARTICIPATIONS_PATH = "/sellers/v1/marketplaceParticipations"
 
 LISTINGS_ITEMS_BASE = "/listings/2021-08-01/items"
 
+# Listings Restrictions API — same 2021-08-01 surface as the items endpoint
+# above, so it shares its version segment but is a distinct path/resource.
+LISTINGS_RESTRICTIONS_PATH = "/listings/2021-08-01/restrictions"
+
 # searchDefinitionsProductTypes (Product Type Definitions API 2020-09-01). A
 # different API from the two above: it searches Amazon's registry of product
 # types rather than the catalog of products, which is why it can answer for a
