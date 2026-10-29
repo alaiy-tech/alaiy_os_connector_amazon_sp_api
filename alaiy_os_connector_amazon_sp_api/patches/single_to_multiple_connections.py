@@ -97,9 +97,9 @@ def _drop_dangling_links(doc) -> None:
 	this site has never had:
 
 	  * a row in tabSingles, written while the record still existed;
-	  * a field default. `orders_selling_price_list` defaults to
+	  * a field default. `orders_selling_price_list` used to default to
 	    "Standard Selling", a Price List that exists only on a site whose
-	    ERPNext setup wizard created it, and the default lands on the document
+	    ERPNext setup wizard created it, and a default lands on the document
 	    whether or not the Single ever stored that field.
 
 	Left to `_validate_links`, either one throws, and a throw here takes the
@@ -119,8 +119,8 @@ def _drop_dangling_links(doc) -> None:
 	visible to anything outside it.
 
 	Dropping rather than keeping: every one of these fields is optional to the
-	connector (`spapi.orders` falls back to "Standard Selling" when the price
-	list is empty), so a seller re-picking a warehouse is a far smaller thing
+	connector (`spapi.orders` falls back to a selling Price List the site has
+	when the field is empty), so a seller re-picking a warehouse is a far smaller thing
 	than a deploy that cannot proceed. It is logged all the same — a setting
 	going quietly empty is worth a line.
 	"""

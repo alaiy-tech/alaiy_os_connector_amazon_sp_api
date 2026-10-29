@@ -319,3 +319,30 @@ class TestAmazonOrderMapping(UnitTestCase):
 		# outcomes that DID leave a Sales Order behind must not be in it
 		for outcome in ("created", "updated", "unchanged"):
 			self.assertNotIn(outcome, orders.NON_PERSISTING_OUTCOMES)
+
+
+class TestPriceList(UnitTestCase):
+	""""Standard Selling" exists only where ERPNext's setup wizard ran."""
+
+	def price_list(self, configured=None, standard=True, first=None):
+		db = frappe._dict(
+			exists=lambda doctype, filters: standard,
+			get_value=lambda *args, **kwargs: first,
+		)
+		with patch.object(orders.frappe, "db", db):
+			return orders._price_list(frappe._dict(orders_selling_price_list=configured))
+
+	def test_the_connections_own_list_wins(self):
+		self.assertEqual(self.price_list("Retail Selling"), "Retail Selling")
+
+	def test_standard_selling_when_the_site_has_it(self):
+		self.assertEqual(self.price_list(first="Retail Selling"), orders.STANDARD_SELLING)
+
+	def test_a_site_without_it_uses_a_list_it_does_have(self):
+		self.assertEqual(self.price_list(standard=False, first="Retail Selling"), "Retail Selling")
+
+	def test_no_selling_list_at_all_is_refused(self):
+		with patch.object(orders.frappe, "throw", side_effect=frappe.ValidationError) as throw:
+			with self.assertRaises(frappe.ValidationError):
+				self.price_list(standard=False)
+		throw.assert_called_once()

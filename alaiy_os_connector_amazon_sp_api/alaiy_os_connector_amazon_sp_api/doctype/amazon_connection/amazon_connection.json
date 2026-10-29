@@ -193,7 +193,7 @@
    "options": "Warehouse"
   },
   {
-   "default": "Standard Selling",
+   "description": "Leave blank to use Standard Selling, or the first enabled selling Price List when this site has no Standard Selling.",
    "fieldname": "orders_selling_price_list",
    "fieldtype": "Link",
    "label": "Selling Price List",
@@ -227,7 +227,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 0,
  "links": [],
- "modified": "2026-07-16 00:00:00.000000",
+ "modified": "2026-10-29 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Connection",

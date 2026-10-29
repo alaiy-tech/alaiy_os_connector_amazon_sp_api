@@ -118,8 +118,32 @@ def _warehouse(conn, company):
 	return fallback
 
 
+STANDARD_SELLING = "Standard Selling"
+
+
 def _price_list(conn):
-	return conn.orders_selling_price_list or "Standard Selling"
+	"""
+	The connection's price list, else one this site actually has.
+
+	"Standard Selling" exists only where ERPNext's setup wizard made it, so it
+	cannot be assumed: a site seeded without the wizard would fail every order
+	on a Link to a record it never had. Prefer it when present, else the first
+	enabled selling list, and refuse by name when there is none.
+	"""
+	if conn.orders_selling_price_list:
+		return conn.orders_selling_price_list
+	if frappe.db.exists("Price List", {"name": STANDARD_SELLING, "selling": 1, "enabled": 1}):
+		return STANDARD_SELLING
+	fallback = frappe.db.get_value(
+		"Price List", {"selling": 1, "enabled": 1}, "name", order_by="creation asc"
+	)
+	if not fallback:
+		frappe.throw(
+			_(
+				"No enabled selling Price List exists. Create one, then set it under Orders on the Amazon Connection."
+			)
+		)
+	return fallback
 
 
 # --- SP-API calls ------------------------------------------------------------
