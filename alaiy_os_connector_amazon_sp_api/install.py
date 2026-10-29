@@ -121,6 +121,16 @@ def _ensure_order_custom_fields():
 				"allow_on_submit": 1,
 				"insert_after": "amazon_order_total",
 			},
+			{
+				"fieldname": "amazon_connection",
+				"label": "Amazon Connection",
+				"fieldtype": "Link",
+				"options": "Amazon Connection",
+				"read_only": 1,
+				"search_index": 1,
+				"insert_after": "amazon_last_updated_at",
+				"description": "The seller account this order was sold on. On a bench with several sellers, the only reliable way back to which one it was.",
+			},
 		],
 		"Sales Order Item": [
 			{
