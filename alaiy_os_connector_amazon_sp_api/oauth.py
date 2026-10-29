@@ -33,6 +33,27 @@ def redirect_uri():
 	return f"{config.app_url()}/amazon-oauth/callback"
 
 
+def checked_redirect_uri(redirect_to=None):
+	"""The callback this round trip returns to: the bench's own, or an allowed other.
+
+	An app with its own frontend on its own hostname — a buyer portal, say —
+	cannot use the bench's callback: the browser would come back to a host the
+	user has no session on. It names its own instead, and that name is only
+	accepted from `amazon_allowed_redirect_uris`. Amazon refuses a URI the SP-API
+	app does not have registered anyway, but that refusal comes on Amazon's
+	screen, after the user has left; this one comes back to the caller, and keeps
+	the bench from being used to bounce a consent code somewhere it never meant
+	to send one.
+	"""
+	default = redirect_uri()
+	if not redirect_to:
+		return default
+	redirect_to = redirect_to.strip().rstrip("/")
+	if redirect_to == default or redirect_to in config.allowed_redirect_uris():
+		return redirect_to
+	raise frappe.PermissionError(_("{0} is not an allowed Amazon OAuth redirect URI.").format(redirect_to))
+
+
 def _state_cache_key(state):
 	# Keyed by the state itself, never by the session that minted it.
 	#
@@ -50,7 +71,7 @@ def _state_cache_key(state):
 	return f"amazon_oauth_state::{state}"
 
 
-def issue_state(connection=None):
+def issue_state(connection=None, redirect_to=None):
 	"""
 	Mint a single-use state, remembering who it is for and what it authorises.
 
@@ -61,13 +82,16 @@ def issue_state(connection=None):
 	The user is stored for the reason the cache key used to be the session id —
 	so that a state can only ever be spent by the operator who started it. See
 	`_state_cache_key` for why the session id itself cannot do that job here.
+
+	`redirect_to` is stored too, already checked, because the code exchange has
+	to name the very URI the consent screen was given — and by the callback the
+	only party left that knows which one that was is this entry.
 	"""
+	entry = {"user": frappe.session.user, "connection": connections.resolve_name(connection)}
+	if redirect_to:
+		entry["redirect_uri"] = checked_redirect_uri(redirect_to)
 	state = frappe.generate_hash(length=32)
-	frappe.cache().set_value(
-		_state_cache_key(state),
-		{"user": frappe.session.user, "connection": connections.resolve_name(connection)},
-		expires_in_sec=STATE_TTL,
-	)
+	frappe.cache().set_value(_state_cache_key(state), entry, expires_in_sec=STATE_TTL)
 	return state
 
 
@@ -87,6 +111,12 @@ def consume_state(received):
 
 	Single-use — the entry is dropped whether or not the user checks out.
 	"""
+	stored = _consume(received)
+	return stored.get("connection") if stored else None
+
+
+def _consume(received):
+	"""The whole state entry — connection and redirect URI — or None. See `consume_state`."""
 	if not received:
 		return None
 	key = _state_cache_key(received)
@@ -96,11 +126,15 @@ def consume_state(received):
 		return None
 	if stored.get("user") != frappe.session.user:
 		return None
-	return stored.get("connection")
+	return stored
 
 
-def consent_url(state, connection=None):
-	"""Build the Amazon Seller Central consent URL."""
+def consent_url(state, connection=None, redirect_to=None):
+	"""Build the Amazon Seller Central consent URL.
+
+	`redirect_to` must be the one `issue_state` was given for this state, so the
+	exchange in `complete_authorization` names the same URI.
+	"""
 	config.assert_ready()
 
 	connection = connections.resolve(connection)
@@ -111,7 +145,7 @@ def consent_url(state, connection=None):
 	params = {
 		"application_id": config.sp_app_id(),
 		"state": state,
-		"redirect_uri": redirect_uri(),
+		"redirect_uri": checked_redirect_uri(redirect_to),
 	}
 	# Draft apps must request the beta consent.
 	if config.app_beta() or connection.app_status == "Draft":
@@ -160,7 +194,8 @@ def complete_authorization(code, state, selling_partner_id=None, error=None, err
 
 	# The state names which connection this round trip authorises; Amazon sends
 	# nothing that would let us work it out afterwards.
-	target = consume_state(state)
+	stored = _consume(state)
+	target = stored.get("connection") if stored else None
 	if not target:
 		return _failed(_("OAuth state mismatch. Please start the connection again."))
 
@@ -168,7 +203,7 @@ def complete_authorization(code, state, selling_partner_id=None, error=None, err
 		return _failed(_("No authorization code returned by Amazon."))
 
 	try:
-		token_payload = auth.exchange_authorization_code(code, redirect_uri())
+		token_payload = auth.exchange_authorization_code(code, stored.get("redirect_uri") or redirect_uri())
 	except auth.LwaError as e:
 		return _failed(_("Token exchange failed: {0}").format(e.message))
 

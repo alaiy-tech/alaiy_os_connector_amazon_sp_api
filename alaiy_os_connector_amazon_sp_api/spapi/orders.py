@@ -609,6 +609,7 @@ def _build_sales_order(order, mp, config, amazon_order_id, rows):
 	so.amazon_fulfillment_channel = order.get("FulfillmentChannel")
 	so.amazon_order_total = _money(order.get("OrderTotal"))
 	so.amazon_last_updated_at = _from_amazon_iso(order.get("LastUpdateDate"))
+	so.amazon_connection = config.get("connection")
 	for row in rows:
 		so.append("items", row)
 	return so
@@ -727,6 +728,7 @@ def _build_config(conn, mp):
 		return (ship_by or purchase).date()
 
 	return {
+		"connection": conn.name,
 		"company": company,
 		"company_currency": frappe.get_cached_value("Company", company, "default_currency"),
 		"customer": _customer(conn),
@@ -799,7 +801,10 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 	it forever. Orders ahead of that point are still not re-read.
 	"""
 	conn = _connection(connection)
-	mp = _marketplace(marketplace)
+	# Named, not left to the default: with several sellers on a bench an unnamed
+	# look-up either refuses outright or hands every seller the default seller's
+	# marketplace.
+	mp = _marketplace(marketplace, connection=conn)
 	client = SpApiClient(conn)
 	start, end = _resolve_window(conn, updated_after, updated_before)
 

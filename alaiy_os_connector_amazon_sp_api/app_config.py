@@ -54,6 +54,17 @@ CONFIG_KEYS = [
 		"description": "Base URL for building the OAuth redirect URI. Falls back to the site URL.",
 	},
 	{
+		"key": "amazon_allowed_redirect_uris",
+		"label": "Extra OAuth Redirect URIs",
+		"required": False,
+		"secret": False,
+		"description": (
+			"Callback URLs, besides the one built from App URL, that another app may ask the "
+			"consent round trip to return to. A list, or one comma-separated string. Each must "
+			"also be registered on the SP-API app."
+		),
+	},
+	{
 		"key": "amazon_consent_base_url",
 		"label": "Consent Base URL",
 		"required": False,
@@ -111,6 +122,18 @@ def sp_app_id():
 
 def app_url():
 	return (get("app_url") or frappe.utils.get_url()).rstrip("/")
+
+
+def allowed_redirect_uris():
+	"""The extra callback URLs a caller may name, normalised without a trailing slash.
+
+	Read as a list or as one comma-separated string, because `bench set-config`
+	can only write the second.
+	"""
+	value = get("amazon_allowed_redirect_uris") or []
+	if isinstance(value, str):
+		value = value.split(",")
+	return [uri.strip().rstrip("/") for uri in value if uri and uri.strip()]
 
 
 def app_beta():

@@ -951,6 +951,9 @@ def publish_listings(skus, marketplace=None, connection=None):
 		skus=skus,
 		marketplace=marketplace,
 		notify_user=frappe.session.user,
+		# The seller for rows that name none — a row that does is published as
+		# its own seller regardless (see listings.on_row_connection).
+		connection=conn.name,
 	)
 	return {"queued": True, "count": len(skus)}
 
@@ -1161,6 +1164,7 @@ def sync_all_listings(marketplace=None, connection=None):
 		timeout=1500,
 		marketplace=marketplace,
 		notify_user=frappe.session.user,
+		connection=conn.name,
 	)
 	return {"queued": True}
 
@@ -1183,6 +1187,7 @@ def reconcile_listings(marketplace=None, connection=None):
 		timeout=1500,
 		marketplace=marketplace,
 		notify_user=frappe.session.user,
+		connection=conn.name,
 	)
 	return {"queued": True}
 

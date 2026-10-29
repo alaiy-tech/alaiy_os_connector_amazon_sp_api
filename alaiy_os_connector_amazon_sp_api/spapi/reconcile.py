@@ -47,6 +47,7 @@ from alaiy_os_connector_amazon_sp_api.spapi.listings import (
 	_apply_content,
 	_apply_variation,
 	_marketplace,
+	stamp_connection,
 )
 
 # The report's `status` column -> our listing_status. The report does not expose
@@ -64,14 +65,16 @@ def reconcile_all_listings(marketplace=None, notify_user=None, connection=None):
 	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
-	mp = _marketplace(marketplace)
+	mp = _marketplace(marketplace, connection=conn)
 	client = SpApiClient(conn)
 
 	try:
 		text = reports.fetch_report(
 			REPORT_MERCHANT_LISTINGS_ALL, [mp.marketplace_id], client=client, context="reconcile"
 		)
-		summary = _apply_report(mp, text, client=client)
+		# Scoped so every row the report creates is stamped as this seller's.
+		with connections.using(conn.name):
+			summary = _apply_report(mp, text, client=client)
 		summary.update({"success": True, "marketplace": mp.name})
 	except Exception as e:
 		frappe.db.rollback()
@@ -208,6 +211,7 @@ def _apply_report(mp, text, client=None):
 				{"doctype": "Amazon Product Listing", "sku": sku, "marketplace": mp.name, "currency": mp.currency}
 			)
 			_assign(doc, fields, is_new=True)
+			stamp_connection(doc)
 			_apply_catalog(doc, mp, catalog_content)
 			_seed_content(doc, row)
 			doc.last_synced_at = now_datetime()

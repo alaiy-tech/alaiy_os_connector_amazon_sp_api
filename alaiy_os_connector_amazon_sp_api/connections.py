@@ -27,6 +27,8 @@ seller's data instead of refusing, which is the whole failure this is meant to
 prevent. Rules 1 and 2 already cover every upgraded bench between them.
 """
 
+from contextlib import contextmanager
+
 import frappe
 from frappe import _
 
@@ -57,8 +59,47 @@ def names() -> list[str]:
 	return frappe.get_all(DOCTYPE, pluck="name", order_by="creation asc")
 
 
+@contextmanager
+def using(connection):
+	"""Answer every unnamed call inside this block with `connection`.
+
+	The listing code was written when a bench had one seller, so most of it asks
+	for "the" connection — `_connection()`, `_marketplace()`, a bare
+	`SpApiClient()` — twenty-odd places, several calls deep. On a bench where each
+	register row belongs to a seller of its own, every one of those has to mean
+	*that row's* seller. Naming it at each call would thread an argument through
+	all of them and leave the next one added to get wrong; scoping it here makes
+	the one place that knows — the row — say so once, and every unnamed call
+	below it agree.
+
+	A falsy `connection` leaves the scope alone (the outer one, else the
+	default rules), so a row nobody assigned to a seller behaves exactly as it
+	always did. Scopes nest and restore on the way out, exceptions included.
+	"""
+	if not connection:
+		yield
+		return
+	name = getattr(connection, "name", connection)
+	previous = getattr(frappe.local, "amazon_connection", None)
+	frappe.local.amazon_connection = name
+	try:
+		yield
+	finally:
+		frappe.local.amazon_connection = previous
+
+
+def scoped() -> str | None:
+	"""The connection a `using` block named, if this call is inside one."""
+	return getattr(frappe.local, "amazon_connection", None)
+
+
 def resolve_name(connection=None) -> str:
-	"""The name of the connection this call is about."""
+	"""The name of the connection this call is about.
+
+	An unnamed call inside a `using` block answers with that block's connection
+	before any of the rules below.
+	"""
+	connection = connection or scoped()
 	if connection:
 		# A Document, not an id — callers pass either.
 		name = getattr(connection, "name", connection)

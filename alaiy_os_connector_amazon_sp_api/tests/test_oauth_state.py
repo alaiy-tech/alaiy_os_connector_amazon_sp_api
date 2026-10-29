@@ -138,3 +138,67 @@ class TestOauthState(UnitTestCase):
 
 		self.assertIsNone(oauth.consume_state(None))
 		self.assertIsNone(oauth.consume_state(""))
+
+
+BENCH_CALLBACK = "https://bench.example.com/amazon-oauth/callback"
+PORTAL_CALLBACK = "https://portal.example.com/amazon/callback"
+
+
+class TestRedirectOverride(UnitTestCase):
+	"""A portal on its own hostname names its own callback — and only an allowed one.
+
+	The exchange has to name the URI the consent screen was given, byte for byte,
+	or LWA refuses the code. So the override is stored with the state, and the
+	callback reads it back from there rather than from anything the browser sends.
+	"""
+
+	def setUp(self):
+		self.cache = FakeCache()
+		for patcher in (
+			patch.object(oauth.frappe, "cache", return_value=self.cache),
+			patch.object(
+				oauth.connections, "resolve_name", side_effect=lambda connection=None: connection or "default"
+			),
+			patch.object(oauth.frappe, "session", frappe._dict(user=OPERATOR, sid="sid-portal")),
+			patch.object(oauth, "redirect_uri", return_value=BENCH_CALLBACK),
+			patch.object(oauth.config, "allowed_redirect_uris", return_value=[PORTAL_CALLBACK]),
+		):
+			patcher.start()
+			self.addCleanup(patcher.stop)
+
+	def test_no_override_is_the_bench_callback(self):
+		self.assertEqual(oauth.checked_redirect_uri(), BENCH_CALLBACK)
+		self.assertEqual(oauth.checked_redirect_uri(None), BENCH_CALLBACK)
+
+	def test_an_allowed_uri_is_accepted_without_its_trailing_slash(self):
+		self.assertEqual(oauth.checked_redirect_uri(PORTAL_CALLBACK + "/"), PORTAL_CALLBACK)
+
+	def test_an_unlisted_uri_is_refused(self):
+		with self.assertRaises(frappe.PermissionError):
+			oauth.checked_redirect_uri("https://evil.example.com/amazon/callback")
+
+	def test_an_unlisted_uri_is_refused_before_a_state_is_issued(self):
+		with self.assertRaises(frappe.PermissionError):
+			oauth.issue_state("seller-b", redirect_to="https://evil.example.com/cb")
+		self.assertEqual(self.cache.store, {})
+
+	def test_the_exchange_names_the_uri_the_state_was_issued_with(self):
+		state = oauth.issue_state("seller-b", redirect_to=PORTAL_CALLBACK)
+		with (
+			patch.object(oauth.auth, "exchange_authorization_code", return_value={}) as exchange,
+		):
+			result = oauth.complete_authorization("CODE", state)
+		exchange.assert_called_once_with("CODE", PORTAL_CALLBACK)
+		# No refresh token in the fake payload: the flow stops there, having
+		# already named the URI — which is the part under test.
+		self.assertFalse(result["success"])
+
+	def test_a_state_without_an_override_exchanges_on_the_bench_callback(self):
+		state = oauth.issue_state("seller-b")
+		with patch.object(oauth.auth, "exchange_authorization_code", return_value={}) as exchange:
+			oauth.complete_authorization("CODE", state)
+		exchange.assert_called_once_with("CODE", BENCH_CALLBACK)
+
+	def test_consume_state_still_answers_with_the_connection(self):
+		state = oauth.issue_state("seller-b", redirect_to=PORTAL_CALLBACK)
+		self.assertEqual(oauth.consume_state(state), "seller-b")

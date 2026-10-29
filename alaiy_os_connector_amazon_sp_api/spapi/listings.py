@@ -30,6 +30,7 @@ common product-type schema; they may need per-marketplace/product-type tuning
 against a real account.
 """
 
+import functools
 import json
 from urllib.parse import quote
 
@@ -66,6 +67,38 @@ def _marketplace(marketplace=None, connection=None):
 	if not marketplace:
 		frappe.throw(_("No marketplace given and no primary marketplace set on the connection."))
 	return frappe.get_cached_doc("Amazon Marketplace", marketplace)
+
+
+def on_row_connection(fn):
+	"""Run `fn(sku, ...)` as the seller whose register row this SKU is.
+
+	A row carries the connection it was listed under; one with none predates
+	sellers sharing a bench and keeps resolving the way it always did. Everything
+	below the call — `_connection()`, `_marketplace()`, a bare `SpApiClient()` —
+	then answers for that seller (see `connections.using`), so a publish for one
+	buyer can never go out on another's account because some helper three calls
+	down asked for "the" connection.
+	"""
+
+	@functools.wraps(fn)
+	def wrapper(*args, **kwargs):
+		sku = args[0] if args else kwargs.get("sku")
+		connection = frappe.db.get_value("Amazon Product Listing", sku, "connection") if sku else None
+		with connections.using(connection):
+			return fn(*args, **kwargs)
+
+	return wrapper
+
+
+def stamp_connection(row):
+	"""Give a row the connection the current call is scoped to, if it has none.
+
+	Only ever fills a blank: a row already listed under a seller stays theirs.
+	Outside a `connections.using` block there is nothing to stamp, which is every
+	single-seller bench.
+	"""
+	if not row.get("connection") and connections.scoped():
+		row.connection = connections.scoped()
 
 
 def _seller_path(seller_id, sku):
@@ -123,15 +156,15 @@ def _raise_on_rejected_submission(response, issues, action):
 
 
 # --- catalog search ----------------------------------------------------------
-def search_catalog(query, marketplace=None, page_size=10):
+def search_catalog(query, marketplace=None, page_size=10, connection=None):
 	"""Search the Amazon catalog for an ASIN + product type before listing.
 
 	Returns [{asin, title, brand, image_url, product_type}].
 	"""
 	if not query:
 		frappe.throw(_("Enter a search term (keywords or an ASIN)."))
-	mp = _marketplace(marketplace)
-	client = SpApiClient()
+	mp = _marketplace(marketplace, connection=connection)
+	client = SpApiClient(connection)
 
 	params = {
 		"marketplaceIds": mp.marketplace_id,
@@ -302,6 +335,7 @@ def _availability_attribute(quantity, fulfillment_channel):
 
 
 # --- create ------------------------------------------------------------------
+@on_row_connection
 def create_listing(
 	sku,
 	*,
@@ -418,6 +452,8 @@ def _apply_submitted_offer(
 		values["price"] = flt(price)
 	if quantity is not None:
 		values["quantity"] = cint(quantity)
+	if connections.scoped():
+		values["connection"] = connections.scoped()
 	if product:
 		values["product"] = product
 
@@ -456,6 +492,7 @@ _PATCHABLE = set(_PUSH_FIELDS)
 _CONTENT_FIELDS = {"title", "description", "bullet_points", "keywords", "images"}
 
 
+@on_row_connection
 def update_listing(sku, changes, marketplace=None):
 	"""Update offer + content attributes. Tries PATCH, falls back to PUT."""
 	conn = _connection()
@@ -654,6 +691,7 @@ def product_type_from_raw_summary(raw):
 
 
 # --- delete ------------------------------------------------------------------
+@on_row_connection
 def delete_listing(sku, marketplace=None):
 	"""End a listing. Per policy we keep the row and mark it inactive."""
 	conn = _connection()
@@ -678,6 +716,7 @@ def delete_listing(sku, marketplace=None):
 
 
 # --- get + upsert ------------------------------------------------------------
+@on_row_connection
 def get_listing_item(sku, marketplace=None, missing_ok=False):
 	"""GET the full Listings item with summaries/attributes/issues/offers.
 
@@ -735,6 +774,7 @@ def _item_asin(sku, item):
 	return frappe.db.get_value("Amazon Product Listing", sku, "asin")
 
 
+@on_row_connection
 def sync_listing(
 	sku, marketplace=None, product=None, fulfillment_channel=None, product_type=None, missing_ok=False
 ):
@@ -846,6 +886,7 @@ def _upsert_from_item(
 	_apply_content(row, mp, item, summary, catalog_content=catalog_content)
 	_apply_variation(row, catalog_content)
 	_apply_catalog_facts(row, catalog_content)
+	stamp_connection(row)
 
 	row.flags.ignore_permissions = True
 	row.save(ignore_permissions=True)
@@ -962,6 +1003,7 @@ def _apply_content(row, mp, item, summary, catalog_content=None):
 _PRICE_PRECISION = 2
 
 
+@on_row_connection
 def remote_snapshot(sku, marketplace=None, missing_ok=False):
 	"""What Amazon currently holds for a SKU, keyed like an Amazon Product Listing.
 
@@ -1061,6 +1103,7 @@ def diff_from_remote(remote, desired):
 	return changes
 
 
+@on_row_connection
 def compare_listing(sku, desired, marketplace=None):
 	"""Preview a push: Amazon's current state, and the subset of `desired` that differs.
 
@@ -1457,12 +1500,18 @@ def _search_listings_items(mp, client, page_token=None, connection=None):
 		_handle_forbidden(e)
 
 
-def sync_all_listings(marketplace=None, notify_user=None):
+def sync_all_listings(marketplace=None, notify_user=None, connection=None):
 	"""Page through every listing on the primary marketplace and upsert each.
 
 	Intended to run as a background job. Publishes an `amazon_sync_all_complete`
-	realtime event to `notify_user` when done.
+	realtime event to `notify_user` when done. With a `connection`, it is that
+	seller's listings, and new rows are stamped as theirs.
 	"""
+	with connections.using(connection):
+		return _sync_all_listings(marketplace, notify_user)
+
+
+def _sync_all_listings(marketplace, notify_user):
 	conn = _connection()
 	mp = _marketplace(marketplace)
 	client = SpApiClient(conn)
@@ -1595,6 +1644,7 @@ def _create_warnings(row):
 	return warnings
 
 
+@on_row_connection
 def preview_publish(sku, desired=None, marketplace=None):
 	"""What publishing this row would do, without submitting anything.
 
@@ -1660,6 +1710,7 @@ def preview_publish(sku, desired=None, marketplace=None):
 	}
 
 
+@on_row_connection
 def publish_listing(sku, marketplace=None, desired=None):
 	"""Publish one register row: create the offer, or submit what Amazon lacks.
 
@@ -1755,7 +1806,7 @@ def _publish_error(exc):
 	return " ".join(message.split()) or exc.__class__.__name__
 
 
-def publish_listings(skus, marketplace=None, notify_user=None):
+def publish_listings(skus, marketplace=None, notify_user=None, connection=None):
 	"""Publish each SKU in turn, creating the ones Amazon does not have.
 
 	Intended to run as a background job: a selection is up to PUBLISH_MAX rows and
@@ -1765,7 +1816,15 @@ def publish_listings(skus, marketplace=None, notify_user=None):
 
 	Publishes an `amazon_publish_complete` realtime event to `notify_user`, and
 	returns the same summary.
+
+	Each row publishes as its own seller (`publish_listing` reads it off the
+	row); `connection` is the seller for rows that name none.
 	"""
+	with connections.using(connection):
+		return _publish_listings(skus, marketplace, notify_user)
+
+
+def _publish_listings(skus, marketplace, notify_user):
 	skus = [s for s in (skus or []) if s]
 	counts = {"created": 0, "updated": 0, "unchanged": 0, "failed": 0}
 	results = []
@@ -1827,6 +1886,8 @@ def draft_listing(
 	bullet_points=None,
 	keywords=None,
 	images=None,
+	connection=None,
+	ignore_permissions=False,
 ):
 	"""Create the register row for a listing that does not exist on Amazon yet.
 
@@ -1836,6 +1897,12 @@ def draft_listing(
 	register already had for "not a live listing", and publishing it is a separate
 	decision (`publish_listing`), so a draft can be corrected, or selected into a
 	bulk publish with the rest.
+
+	`connection` lists the row under one seller, which every later publish, sync
+	and update of it then goes out as (see `on_row_connection`). Left out, the
+	row belongs to whoever an unnamed call resolves to — the single-seller case.
+	`ignore_permissions` is for a server-side caller drafting on behalf of a user
+	who holds no Amazon role; the API wrapper never passes it.
 	"""
 	if not sku:
 		frappe.throw(_("A SKU is required."))
@@ -1846,11 +1913,13 @@ def draft_listing(
 			title=_("Already registered"),
 		)
 
-	mp = _marketplace(marketplace)
+	connection = connections.resolve_name(connection) if connection else None
+	mp = _marketplace(marketplace, connection=connection)
 	row = frappe.get_doc(
 		{
 			"doctype": "Amazon Product Listing",
 			"sku": sku,
+			"connection": connection,
 			"asin": asin,
 			"product_type": product_type,
 			"title": title,
@@ -1875,7 +1944,7 @@ def draft_listing(
 	for image in _normalize_images(images):
 		row.append("images", {"image_url": image["url"], "is_main": 1 if image["is_main"] else 0})
 
-	row.insert()
+	row.insert(ignore_permissions=bool(ignore_permissions))
 	return {"sku": row.name, "listing_status": row.listing_status, "marketplace": mp.name}
 
 
@@ -2140,6 +2209,7 @@ def _missing_attribute_blocker(row, schema, name):
 	)
 
 
+@on_row_connection
 def preview_asin_creation(sku, marketplace=None, connection=None):
 	"""What creating this product on Amazon would submit, without submitting it.
 
@@ -2191,6 +2261,7 @@ def _suggested_extra_attributes(mp, row, attributes, schema):
 	return stub
 
 
+@on_row_connection
 def create_asin(sku, marketplace=None):
 	"""Ask Amazon to create a catalog entry for this SKU, and record the submission.
 
