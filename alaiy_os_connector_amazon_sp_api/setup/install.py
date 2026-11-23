@@ -10,17 +10,11 @@ panel in OS Settings, and this connector's own top-level section in the main
 item. The section's child links come from the app's own
 `alaiy_os_sidebar_connector_items` hook (see hooks.py), so nothing here
 touches the Workspace Sidebar doc directly.
-
-What makes the connector *askable* is no longer here. `agent_export.py` declares
-the tools and the Amazon facts that go with them; `alaiy_os_agents` reads that
-through the `connector_agents` hook and owns the OS Agent Registry row, including
-writing it on every migrate. All that is left below is the uninstall, which that
-app cannot do for us — see `unregister_agent`.
 """
 
 import frappe
 
-from alaiy_os_connector_amazon_sp_api import agent_export, install
+from alaiy_os_connector_amazon_sp_api import install
 from alaiy_os_connector_amazon_sp_api.connector_meta import connector_meta
 
 
@@ -59,45 +53,6 @@ def sync_connector_registry():
 
 	frappe.db.commit()
 	_refresh_alaiy_os_sidebar()
-
-
-# --- agent lifecycle ---------------------------------------------------------
-# Writing the OS Agent Registry row is no longer done here. `agent_export.export()`
-# declares what this connector can be asked; `alaiy_os_agents` reads it through the
-# `connector_agents` hook and upserts the row on its own migrate, with the model,
-# the turn budget and the prompt it decides for every connector agent on the bench.
-#
-# The uninstall stays, because that app cannot do it for us — see below.
-
-
-def unregister_agent():
-	"""Drop this connector's registry row on uninstall, keeping its run history.
-
-	Without this the row outlives the app: its handlers stop importing, so alaiy_os's
-	own migrate check (check_dotted_path_handlers) marks every tool broken and the
-	agent sits in the Desk advertising an app that is gone.
-
-	alaiy_os_agents owns the row but cannot close this case. Its `registry.unregister`
-	fires when *it* is uninstalled, not when a connector is, and its `registry.sync`
-	upserts what the hooks declare without pruning what they have stopped declaring —
-	so uninstalling this app alone leaves the row with nothing to remove it. Hence a
-	hook here, deleting by the id this app's own export asserts rather than by a
-	literal.
-
-	force=True because every past OS Agent Run links to the agent, so the default
-	link check refuses the delete and the uninstall dies on LinkExistsError the moment
-	the agent has been run once. alaiy_os lists OS Agent Run in
-	`ignore_links_on_delete` for exactly that reason; the runs keep their agent id as
-	recorded history and simply stop pointing at a live row.
-	"""
-	if not frappe.db.exists("DocType", "OS Agent Registry"):
-		return
-
-	if frappe.db.exists("OS Agent Registry", agent_export.AGENT_ID):
-		frappe.delete_doc(
-			"OS Agent Registry", agent_export.AGENT_ID, force=True, ignore_permissions=True
-		)
-	frappe.db.commit()
 
 
 # --- sidebar helpers ---------------------------------------------------------

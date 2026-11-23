@@ -19,7 +19,6 @@
   "marketplace",
   "connection",
   "listing_status",
-  "is_enriched",
   "fulfillment_channel",
   "variation_section",
   "is_variation_parent",
@@ -140,16 +139,6 @@
    "in_standard_filter": 1,
    "label": "Listing Status",
    "options": "active\ninactive\nsuppressed\nincomplete\npending"
-  },
-  {
-   "default": "0",
-   "description": "An approved AI enrichment is live on this listing. Set when its Amazon Enriched Listing is approved; cleared when the listing agent re-runs, so it always means the CURRENT content passed review.",
-   "fieldname": "is_enriched",
-   "fieldtype": "Check",
-   "in_list_view": 1,
-   "in_standard_filter": 1,
-   "label": "Enriched",
-   "read_only": 1
   },
   {
    "default": "DEFAULT",

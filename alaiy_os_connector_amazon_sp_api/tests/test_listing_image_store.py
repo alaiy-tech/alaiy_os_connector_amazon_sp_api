@@ -16,7 +16,7 @@ from unittest.mock import patch
 import frappe
 from frappe.tests import UnitTestCase
 
-from alaiy_os_connector_amazon_sp_api.listing import handlers, images
+from alaiy_os_connector_amazon_sp_api.listing import images
 from alaiy_os_connector_amazon_sp_api.spapi import listings
 
 MP = frappe._dict({"name": "A21TJRUUN4KGV", "marketplace_id": "A21TJRUUN4KGV"})
@@ -49,18 +49,6 @@ class TestSendingToAmazon(UnitTestCase):
 		with patch("alaiy_os.image_store.fetchable_url", side_effect=_signed):
 			listings._image_attributes(MP, given)
 		self.assertEqual(given, [{"url": STORED}])
-
-
-class TestSavingAProducedImage(UnitTestCase):
-	def test_the_main_image_is_filed_as_generated_and_the_rest_as_translated(self):
-		with patch("alaiy_os.image_store.save", return_value=STORED) as save:
-			self.assertEqual(handlers._rehost("SKU-1", "main", b"jpg", "image/jpeg"), STORED)
-			handlers._rehost("SKU-1", "gallery_1", b"jpg", "image/jpeg")
-		main, gallery = save.call_args_list
-		self.assertEqual(main.kwargs["category"], "generated")
-		self.assertEqual(gallery.kwargs["category"], "translated")
-		self.assertTrue(main.args[0].startswith("listing-SKU-1-main-"))
-		self.assertEqual(main.kwargs["metadata"], {"sku": "SKU-1", "role": "main"})
 
 
 class TestReadingForTheModel(UnitTestCase):

@@ -868,12 +868,17 @@ def update_listing(sku, changes, marketplace=None):
 def listing_image_view_links(sku):
 	"""Links a browser can show for one listing's images, `{image_url: link}`.
 
-	See `listing.review.listing_image_view_links`: a produced image the site keeps in
-	S3 is private, so a thumbnail needs a signed link.
+	A produced image the site keeps in S3 is private, so a thumbnail needs a signed link.
+	Scoped to one listing the caller may read.
 	"""
-	from alaiy_os_connector_amazon_sp_api.listing import review
+	if not frappe.db.exists("Amazon Product Listing", sku):
+		return {}
+	doc = frappe.get_doc("Amazon Product Listing", sku)
+	doc.check_permission("read")
 
-	return review.listing_image_view_links(sku)
+	from alaiy_os import image_store
+
+	return image_store.viewable_urls(row.image_url for row in doc.images or [])
 
 
 @frappe.whitelist()
