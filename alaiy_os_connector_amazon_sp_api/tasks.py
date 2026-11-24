@@ -4,7 +4,7 @@
 
 import frappe
 
-from alaiy_os_connector_amazon_sp_api import connections
+from alaiy_os_connector_amazon_sp_api import connections, store_policy
 
 from alaiy_os_connector_amazon_sp_api.spapi import health, inventory, orders, reconcile, submissions
 
@@ -15,6 +15,12 @@ def _connection_ready():
 		return False
 	return bool(connections.connected_names())
 
+
+
+def _may_sync(name):
+	"""False for a restricted store whose owner has not allowed any sync."""
+	policy = store_policy.for_connection(name)
+	return policy is None or policy.may_sync
 
 
 def _for_each_connection(label, run):
@@ -28,6 +34,8 @@ def _for_each_connection(label, run):
 	"""
 	for name in connections.connected_names():
 		try:
+			if not _may_sync(name):
+				continue
 			run(name)
 		except Exception:
 			frappe.log_error(
@@ -65,6 +73,8 @@ def sync_orders():
 		if not frappe.db.get_value("Amazon Connection", name, "orders_customer"):
 			continue
 		try:
+			if not _may_sync(name):
+				continue
 			orders.sync_orders(connection=name)
 		except Exception:
 			# Per connection, so one seller's failure does not stop the rest.
