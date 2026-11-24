@@ -34,7 +34,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, now_datetime
 
-from alaiy_os_connector_amazon_sp_api import connections
+from alaiy_os_connector_amazon_sp_api import connections, store_policy
 
 from alaiy_os_connector_amazon_sp_api.spapi import catalog, reports
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient
@@ -66,6 +66,9 @@ def reconcile_all_listings(marketplace=None, notify_user=None, connection=None):
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
 	mp = _marketplace(marketplace, connection=conn)
+	policy = store_policy.for_connection(conn.name)
+	if policy and not policy.may_sync:
+		return {"success": True, "marketplace": mp.name, "skipped": "no sync allowed"}
 	client = SpApiClient(conn)
 
 	try:
@@ -74,7 +77,7 @@ def reconcile_all_listings(marketplace=None, notify_user=None, connection=None):
 		)
 		# Scoped so every row the report creates is stamped as this seller's.
 		with connections.using(conn.name):
-			summary = _apply_report(mp, text, client=client)
+			summary = _apply_report(mp, text, client=client, policy=policy)
 		summary.update({"success": True, "marketplace": mp.name})
 	except Exception as e:
 		frappe.db.rollback()
@@ -165,7 +168,7 @@ def _enrich_from_catalog(mp, rows, client):
 	return content, stats
 
 
-def _apply_report(mp, text, client=None):
+def _apply_report(mp, text, client=None, policy=None):
 	"""Parse the report TSV and upsert each SKU's offer/status fields.
 
 	Content and parentage ride along for rows that have never had them — see the
@@ -173,6 +176,9 @@ def _apply_report(mp, text, client=None):
 	Listings-API sync.
 	"""
 	rows = [r for r in _parse_rows(text) if r.get("seller-sku")]
+	if policy:
+		# Before the catalog look-up, so a SKU that is not kept never has its ASIN fetched.
+		rows = [r for r in rows if policy.keeps_sku(r["seller-sku"])]
 	content_by_asin, stats = _enrich_from_catalog(mp, rows, client)
 
 	seen = created = updated = skipped_pending = 0

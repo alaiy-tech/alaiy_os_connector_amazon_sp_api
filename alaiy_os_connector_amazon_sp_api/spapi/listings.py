@@ -38,7 +38,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, now_datetime, strip_html
 
-from alaiy_os_connector_amazon_sp_api import connections
+from alaiy_os_connector_amazon_sp_api import connections, store_policy
 
 from alaiy_os_connector_amazon_sp_api.spapi import catalog, product_types
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
@@ -784,6 +784,9 @@ def sync_listing(
 	listing for the SKU.
 	"""
 	mp = _marketplace(marketplace)
+	policy = store_policy.for_connection(connections.resolve().name)
+	if policy and not (policy.may_sync and policy.keeps_sku(sku)):
+		return None
 	item = get_listing_item(sku, marketplace=mp.name, missing_ok=missing_ok)
 	if item is None:
 		return None
@@ -829,10 +832,22 @@ def _offer_from_item(item, summary):
 
 
 def _upsert_from_item(
-	sku, mp, item, product=None, fulfillment_channel=None, product_type=None, catalog_content=None
+	sku,
+	mp,
+	item,
+	product=None,
+	fulfillment_channel=None,
+	product_type=None,
+	catalog_content=None,
+	policy=None,
 ):
 	"""Upsert an Amazon Product Listing row from a Listings-Items payload (single GET or
-	a searchListingsItems entry — both share the summaries/issues/offers shape)."""
+	a searchListingsItems entry — both share the summaries/issues/offers shape).
+
+	Answers None, having written nothing, when a store policy does not keep the SKU.
+	"""
+	if policy and not policy.keeps_sku(sku):
+		return None
 	summaries = item.get("summaries") or []
 	summary = summaries[0] if summaries else {}
 	issues = _issues_from(item)
@@ -1514,6 +1529,9 @@ def sync_all_listings(marketplace=None, notify_user=None, connection=None):
 def _sync_all_listings(marketplace, notify_user):
 	conn = _connection()
 	mp = _marketplace(marketplace)
+	policy = store_policy.for_connection(conn.name)
+	if policy and not policy.may_sync:
+		return {"success": True, "marketplace": mp.name, "synced": 0, "skipped": "no sync allowed"}
 	client = SpApiClient(conn)
 
 	total = 0
@@ -1525,6 +1543,9 @@ def _sync_all_listings(marketplace, notify_user):
 		for page in range(SEARCH_MAX_PAGES):
 			resp = _search_listings_items(mp, client, page_token=page_token)
 			items = [i for i in (resp.get("items") or []) if i.get("sku")]
+			if policy:
+				# Before the catalog look-up below, so a SKU that is not kept never has its ASIN fetched.
+				items = [i for i in items if policy.keeps_sku(i["sku"])]
 			# One catalog call per page, not per SKU: the page holds at most
 			# SEARCH_PAGE_SIZE listings and `identifiers` takes 20 ASINs, so the
 			# content look-up costs a single extra request per page.
@@ -1535,7 +1556,7 @@ def _sync_all_listings(marketplace, notify_user):
 				sku = item["sku"]
 				asin = _item_asin(sku, item)
 				result = _upsert_from_item(
-					sku, mp, item, catalog_content=content_by_asin.get(asin) if asin else None
+					sku, mp, item, catalog_content=content_by_asin.get(asin) if asin else None, policy=policy
 				)
 				total += 1
 				status = result["listing_status"]
