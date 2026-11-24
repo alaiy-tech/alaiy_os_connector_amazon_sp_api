@@ -31,7 +31,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_to_date, cint, flt, get_datetime, now_datetime
 
-from alaiy_os_connector_amazon_sp_api import connections
+from alaiy_os_connector_amazon_sp_api import connections, store_policy
 
 from alaiy_os_connector_amazon_sp_api.spapi import times
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
@@ -323,6 +323,29 @@ def _line_items(order_items, warehouse, delivery_date, fallback_item=None):
 	return rows, unmapped
 
 
+def _kept_lines(order_items, config):
+	"""Under a store policy, only the order lines of SKUs the policy keeps."""
+	policy = config.get("policy")
+	if not policy:
+		return order_items
+	return [i for i in order_items if policy.keeps_sku(i.get("SellerSKU") or "")]
+
+
+def _order_total(order, order_items, config):
+	"""Amazon's order total, or under a store policy the total of the kept lines only.
+
+	OrderTotal covers every line, so it would reveal the sales of products the
+	policy drops. The kept total is what the Sales Order itself comes to: line
+	prices less promotions, plus Amazon's item tax.
+	"""
+	if not config.get("policy"):
+		return _money(order.get("OrderTotal"))
+	return sum(
+		_money(i.get("ItemPrice")) - _money(i.get("PromotionDiscount")) + _money(i.get("ItemTax"))
+		for i in order_items
+	)
+
+
 def _money(node):
 	"""{'CurrencyCode': 'USD', 'Amount': '12.34'} -> 12.34"""
 	if not node:
@@ -585,7 +608,7 @@ def _upsert_order_unlocked(order, mp, client, config, amazon_order_id):
 		# Cancelled before we ever saw it — nothing worth creating.
 		return "unchanged"
 
-	order_items = fetch_order_items(client, amazon_order_id)
+	order_items = _kept_lines(fetch_order_items(client, amazon_order_id), config)
 	time.sleep(ORDER_ITEMS_MIN_INTERVAL)
 	if not order_items:
 		return "unchanged"
@@ -602,7 +625,14 @@ def _upsert_order_unlocked(order, mp, client, config, amazon_order_id):
 	if not rows:
 		return "unchanged"
 
-	so = _build_sales_order(order, mp, config, amazon_order_id, _merge_duplicate_rows(rows))
+	so = _build_sales_order(
+		order,
+		mp,
+		config,
+		amazon_order_id,
+		_merge_duplicate_rows(rows),
+		_order_total(order, order_items, config),
+	)
 	_append_tax(so, order_items, config["company"])
 	so.flags.ignore_permissions = True
 	so.insert()
@@ -611,7 +641,7 @@ def _upsert_order_unlocked(order, mp, client, config, amazon_order_id):
 	return "created"
 
 
-def _build_sales_order(order, mp, config, amazon_order_id, rows):
+def _build_sales_order(order, mp, config, amazon_order_id, rows, order_total):
 	purchase_date = _from_amazon_iso(order.get("PurchaseDate")) or now_datetime()
 	currency = _order_currency(order, mp, config["company"])
 	transaction_date = purchase_date.date()
@@ -631,7 +661,7 @@ def _build_sales_order(order, mp, config, amazon_order_id, rows):
 	so.amazon_marketplace = mp.name
 	so.amazon_order_status = order.get("OrderStatus")
 	so.amazon_fulfillment_channel = order.get("FulfillmentChannel")
-	so.amazon_order_total = _money(order.get("OrderTotal"))
+	so.amazon_order_total = order_total
 	so.amazon_last_updated_at = _from_amazon_iso(order.get("LastUpdateDate"))
 	so.amazon_connection = config.get("connection")
 	for row in rows:
@@ -659,7 +689,7 @@ def _update_existing(so_name, order, status, amazon_order_id, client, config):
 			)
 			return "conflict"
 		so = frappe.get_doc("Sales Order", so_name)
-		_stamp_status(so, order)
+		_stamp_status(so, order, config)
 		if docstatus == 1:
 			so.flags.ignore_permissions = True
 			so.cancel()
@@ -672,7 +702,7 @@ def _update_existing(so_name, order, status, amazon_order_id, client, config):
 		return _refresh_draft(so_name, order, status, amazon_order_id, client, config)
 
 	so = frappe.get_doc("Sales Order", so_name)
-	return "updated" if _stamp_status(so, order) else "unchanged"
+	return "updated" if _stamp_status(so, order, config) else "unchanged"
 
 
 def _refresh_draft(so_name, order, status, amazon_order_id, client, config):
@@ -685,7 +715,7 @@ def _refresh_draft(so_name, order, status, amazon_order_id, client, config):
 	items can't be corrected afterwards. So the lines are rebuilt from a fresh
 	getOrderItems every time we see the draft.
 	"""
-	order_items = fetch_order_items(client, amazon_order_id)
+	order_items = _kept_lines(fetch_order_items(client, amazon_order_id), config)
 	time.sleep(ORDER_ITEMS_MIN_INTERVAL)
 	if not order_items:
 		return "unchanged"
@@ -711,7 +741,7 @@ def _refresh_draft(so_name, order, status, amazon_order_id, client, config):
 	so.sales_channel = SALES_CHANNEL
 	so.amazon_order_status = order.get("OrderStatus")
 	so.amazon_fulfillment_channel = order.get("FulfillmentChannel")
-	so.amazon_order_total = _money(order.get("OrderTotal"))
+	so.amazon_order_total = _order_total(order, order_items, config)
 	so.amazon_last_updated_at = _from_amazon_iso(order.get("LastUpdateDate"))
 	so.flags.ignore_permissions = True
 	so.save()
@@ -721,14 +751,19 @@ def _refresh_draft(so_name, order, status, amazon_order_id, client, config):
 	return "updated"
 
 
-def _stamp_status(so, order):
-	"""Write the Amazon status fields via db_set (works on submitted docs)."""
+def _stamp_status(so, order, config):
+	"""Write the Amazon status fields via db_set (works on submitted docs).
+
+	Under a store policy the order total is left as it was set from the kept lines:
+	Amazon's own figure here covers lines the policy dropped.
+	"""
 	values = {
 		"amazon_order_status": order.get("OrderStatus"),
 		"amazon_fulfillment_channel": order.get("FulfillmentChannel"),
-		"amazon_order_total": _money(order.get("OrderTotal")),
 		"amazon_last_updated_at": _from_amazon_iso(order.get("LastUpdateDate")),
 	}
+	if not config.get("policy"):
+		values["amazon_order_total"] = _money(order.get("OrderTotal"))
 	changed = False
 	for field, value in values.items():
 		if so.get(field) != value:
@@ -738,7 +773,7 @@ def _stamp_status(so, order):
 
 
 # --- sync drivers ------------------------------------------------------------
-def _build_config(conn, mp):
+def _build_config(conn, mp, policy=None):
 	company = _company(conn)
 	warehouse = _warehouse(conn, company)
 
@@ -758,7 +793,10 @@ def _build_config(conn, mp):
 		"customer": _customer(conn),
 		"warehouse": warehouse,
 		"price_list": _price_list(conn),
-		"fallback_item": _fallback_item(conn),
+		# A restricted store never books against the placeholder: a line whose SKU
+		# the policy keeps but the catalog cannot resolve is held back, not guessed.
+		"fallback_item": None if policy else _fallback_item(conn),
+		"policy": policy,
 		"delivery_date_for": delivery_date_for,
 		# Accumulated across the run so the summary can name every SKU that
 		# needs linking, in one place.
@@ -825,6 +863,11 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 	it forever. Orders ahead of that point are still not re-read.
 	"""
 	conn = _connection(connection)
+	policy = store_policy.for_connection(conn.name)
+	if policy and not policy.may_sync:
+		return _notify(
+			{"success": True, "seen": 0, "skipped": "no sync allowed", "unmapped_skus": []}, notify_user
+		)
 	# Named, not left to the default: with several sellers on a bench an unnamed
 	# look-up either refuses outright or hands every seller the default seller's
 	# marketplace.
@@ -848,7 +891,7 @@ def sync_orders(marketplace=None, updated_after=None, updated_before=None, notif
 	failed_ids = []
 
 	try:
-		config = _build_config(conn, mp)
+		config = _build_config(conn, mp, policy)
 		next_token = None
 		for page in range(ORDERS_MAX_PAGES):
 			orders, next_token = fetch_orders(
