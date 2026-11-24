@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 import frappe
 from frappe.utils import cint, flt, now_datetime
 
-from alaiy_os_connector_amazon_sp_api import connections
+from alaiy_os_connector_amazon_sp_api import connections, store_policy
 from alaiy_os_connector_amazon_sp_api.spapi import reports
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
@@ -323,6 +323,9 @@ def run_health_sync(marketplace=None, connection=None):
 	from alaiy_os_connector_amazon_sp_api.spapi.client import describe_forbidden
 
 	connection = connections.resolve(connection)
+	if store_policy.for_connection(connection.name) is not None:
+		# A restricted store keeps listings and orders only: no health, feedback or finances.
+		return {"connection": connection.name, "skipped": "restricted"}
 	marketplace = marketplace or connection.primary_marketplace
 	if not marketplace:
 		frappe.throw("No marketplace specified and no primary marketplace set on Amazon Connection.")

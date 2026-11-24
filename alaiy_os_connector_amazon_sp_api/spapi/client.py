@@ -14,7 +14,7 @@ import frappe
 import requests
 from frappe.utils import cint
 
-from alaiy_os_connector_amazon_sp_api import connections
+from alaiy_os_connector_amazon_sp_api import connections, store_policy
 
 from alaiy_os_connector_amazon_sp_api.spapi import auth
 from alaiy_os_connector_amazon_sp_api.spapi.constants import (
@@ -60,12 +60,25 @@ class SpApiClient:
 		# stays cheap to construct, and so a caller on a single-connection bench
 		# can still say SpApiClient() and mean the only seller there is.
 		self._connection = connection
+		self._restricted = None
 
 	@property
 	def connection(self):
 		if self._connection is None or isinstance(self._connection, str):
 			self._connection = connections.resolve(self._connection)
 		return self._connection
+
+	def _is_restricted(self):
+		"""True when a store policy governs this connection; resolved once per client.
+
+		Fails closed: if the policy cannot be resolved the response body is not kept.
+		"""
+		if self._restricted is None:
+			try:
+				self._restricted = store_policy.for_connection(self.connection.name) is not None
+			except Exception:
+				return True
+		return self._restricted
 
 	@property
 	def base_url(self):
@@ -184,6 +197,9 @@ class SpApiClient:
 	def _log(self, method, path, status_code, api_error_code, duration_ms, context, excerpt):
 		"""Best-effort write to SP-API Log; never let logging break a call."""
 		try:
+			if self._is_restricted():
+				# The raw body can carry buyer data; the rest of the row is kept.
+				excerpt = ""
 			frappe.get_doc(
 				{
 					"doctype": "SP-API Log",

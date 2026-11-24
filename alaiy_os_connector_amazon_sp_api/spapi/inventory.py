@@ -52,7 +52,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, now_datetime
 
-from alaiy_os_connector_amazon_sp_api import connections
+from alaiy_os_connector_amazon_sp_api import connections, store_policy
 
 from alaiy_os_connector_amazon_sp_api.spapi import times
 from alaiy_os_connector_amazon_sp_api.spapi.client import SpApiClient, SpApiError, describe_forbidden
@@ -256,6 +256,9 @@ def sync_inventory(connection=None, marketplace=None) -> dict:
 	conn = connections.resolve(connection)
 	if not conn.is_connected():
 		frappe.throw(_("Amazon account is not connected."))
+	if store_policy.for_connection(conn.name) is not None:
+		# A restricted store keeps listings and orders only, never stock.
+		return {"connection": conn.name, "skipped": "restricted"}
 
 	from alaiy_os_connector_amazon_sp_api.spapi.listings import _marketplace
 
