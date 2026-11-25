@@ -7,7 +7,8 @@
  "engine": "InnoDB",
  "field_order": [
   "image_url",
-  "is_main"
+  "is_main",
+  "original_url"
  ],
  "fields": [
   {
@@ -25,12 +26,19 @@
    "in_list_view": 1,
    "label": "Main Image",
    "description": "Exactly one row should be the main image; the rest become additional images."
+  },
+  {
+   "fieldname": "original_url",
+   "fieldtype": "Data",
+   "length": 1000,
+   "label": "Original URL",
+   "description": "The photo this one was edited from, when it was edited."
   }
  ],
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-07-29 00:00:00.000000",
+ "modified": "2026-11-25 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Listing Image",

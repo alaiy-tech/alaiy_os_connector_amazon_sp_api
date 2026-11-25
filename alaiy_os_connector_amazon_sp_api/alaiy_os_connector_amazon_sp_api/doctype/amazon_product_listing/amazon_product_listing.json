@@ -38,6 +38,8 @@
   "bullet_points",
   "keywords",
   "extra_attributes",
+  "review_notes",
+  "not_listable",
   "category_section",
   "amazon_category_l1",
   "amazon_category_l2",
@@ -264,6 +266,19 @@
    "description": "A JSON object of additional Amazon attributes, keyed by attribute name, merged into a new-ASIN submission verbatim. This is how a product type's required attributes that no listing field holds (country_of_origin, recommended_browse_nodes, ...) get supplied. Ignored when publishing an offer against an existing ASIN."
   },
   {
+   "fieldname": "review_notes",
+   "fieldtype": "Small Text",
+   "label": "Review Notes",
+   "description": "One note per line, for whoever reviews this draft before Create ASIN."
+  },
+  {
+   "default": "0",
+   "fieldname": "not_listable",
+   "fieldtype": "Check",
+   "label": "Not Listable",
+   "description": "Create ASIN refuses this row; the first line of Review Notes says why."
+  },
+  {
    "fieldname": "category_section",
    "fieldtype": "Section Break",
    "label": "Amazon Category",
@@ -368,7 +383,7 @@
    "link_fieldname": "parent_listing"
   }
  ],
- "modified": "2026-10-29 00:00:00.000000",
+ "modified": "2026-11-25 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Product Listing",
