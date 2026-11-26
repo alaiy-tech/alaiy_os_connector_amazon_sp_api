@@ -19,7 +19,6 @@
   "marketplace",
   "connection",
   "listing_status",
-  "is_enriched",
   "fulfillment_channel",
   "variation_section",
   "is_variation_parent",
@@ -39,6 +38,8 @@
   "bullet_points",
   "keywords",
   "extra_attributes",
+  "review_notes",
+  "not_listable",
   "category_section",
   "amazon_category_l1",
   "amazon_category_l2",
@@ -140,16 +141,6 @@
    "in_standard_filter": 1,
    "label": "Listing Status",
    "options": "active\ninactive\nsuppressed\nincomplete\npending"
-  },
-  {
-   "default": "0",
-   "description": "An approved AI enrichment is live on this listing. Set when its Amazon Enriched Listing is approved; cleared when the listing agent re-runs, so it always means the CURRENT content passed review.",
-   "fieldname": "is_enriched",
-   "fieldtype": "Check",
-   "in_list_view": 1,
-   "in_standard_filter": 1,
-   "label": "Enriched",
-   "read_only": 1
   },
   {
    "default": "DEFAULT",
@@ -275,6 +266,19 @@
    "description": "A JSON object of additional Amazon attributes, keyed by attribute name, merged into a new-ASIN submission verbatim. This is how a product type's required attributes that no listing field holds (country_of_origin, recommended_browse_nodes, ...) get supplied. Ignored when publishing an offer against an existing ASIN."
   },
   {
+   "fieldname": "review_notes",
+   "fieldtype": "Small Text",
+   "label": "Review Notes",
+   "description": "One note per line, for whoever reviews this draft before Create ASIN."
+  },
+  {
+   "default": "0",
+   "fieldname": "not_listable",
+   "fieldtype": "Check",
+   "label": "Not Listable",
+   "description": "Create ASIN refuses this row; the first line of Review Notes says why."
+  },
+  {
    "fieldname": "category_section",
    "fieldtype": "Section Break",
    "label": "Amazon Category",
@@ -379,7 +383,7 @@
    "link_fieldname": "parent_listing"
   }
  ],
- "modified": "2026-10-29 00:00:00.000000",
+ "modified": "2026-11-25 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Connector Amazon Sp Api",
  "name": "Amazon Product Listing",

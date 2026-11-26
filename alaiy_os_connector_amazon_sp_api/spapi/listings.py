@@ -2134,6 +2134,9 @@ def asin_create_blockers(row, attributes, schema):
 	off the product type's own schema, so the answer stays right as Amazon changes
 	what a product type requires.
 	"""
+	if row.get("not_listable"):
+		reason = (row.get("review_notes") or "").strip().splitlines()
+		return [reason[0] if reason else _("Not listable.")]
 	blockers = []
 	if row.get("asin"):
 		blockers.append(

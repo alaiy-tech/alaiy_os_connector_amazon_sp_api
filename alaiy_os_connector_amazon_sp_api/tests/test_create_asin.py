@@ -151,6 +151,15 @@ class TestAsinCreateBlockers(UnitTestCase):
 		)
 		self.assertEqual(self._blockers(row, exempt_brands={"naya"}), [])
 
+	def test_not_listable_row_is_blocked(self):
+		row = _row(
+			title="X",
+			product_type="SHIRT",
+			not_listable=1,
+			review_notes="Not listable: another brand on the product\nother note",
+		)
+		self.assertEqual(self._blockers(row), ["Not listable: another brand on the product"])
+
 	def test_a_row_that_already_has_an_asin_is_told_to_publish_instead(self):
 		row = _row(asin="B0TEST12345", title="X", product_type="SHIRT")
 		self.assertTrue(any("already has an ASIN" in b for b in self._blockers(row)))
